@@ -40,6 +40,7 @@ pub use create_ui::Clip;
 pub use link_ui::LinkDraft;
 pub use optimize_ui::{OptimizeDraft, OptimizeTab};
 pub use sign_ui::{DigitalIdEntry, SignDraft, SignStep};
+mod biblioteca;
 mod dialogs;
 mod edit_text_ui;
 mod editing;
@@ -317,6 +318,14 @@ pub struct PrintCraftApp {
     pub hide_community: bool,
     /// Home: tool groups the user starred, shown first ("My tools").
     pub favorite_tools: Vec<String>,
+    /// Collections (virtual folders of PDFs from anywhere).
+    pub collections: Vec<folders::Collection>,
+    /// Name being typed for a new collection (Some while the field is shown).
+    pub criando_colecao: Option<String>,
+    /// Home: scroll back to the top on the next frame.
+    pub home_to_top: bool,
+    /// Files read in the background (network shares are slow): (name, path, bytes or error).
+    opening: std::sync::Arc<std::sync::Mutex<Vec<(String, String, Result<Vec<u8>, String>)>>>,
     pub toast: Option<(String, f64)>,
     /// Whether the macOS title bar is drawn by us (traffic lights over our tab strip).
     pub integrated_titlebar: bool,
@@ -496,6 +505,10 @@ impl PrintCraftApp {
             progress: Default::default(),
             hide_community: false,
             favorite_tools: Vec::new(),
+            collections: Vec::new(),
+            criando_colecao: None,
+            home_to_top: false,
+            opening: Default::default(),
             toast: None,
             integrated_titlebar: false,
             password_prompt: None,
@@ -801,6 +814,136 @@ impl PrintCraftApp {
         }
     }
 
+    /// Open a file without freezing the window: read it on a thread, open it when it arrives.
+    pub fn open_path_async(&mut self, path: &str) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(i) = self.views.iter().position(|v| self.session.get(v.id).and_then(|d| d.path.as_deref()) == Some(path)) {
+                self.active = Some(i);
+                return;
+            }
+            let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
+            self.notify(format!("Opening {name}…"));
+            let (fila, p, ctx) = (self.opening.clone(), path.to_string(), self.ctx.clone());
+            std::thread::spawn(move || {
+                let r = std::fs::read(&p).map_err(|e| e.to_string());
+                if let Ok(mut q) = fila.lock() {
+                    q.push((name, p, r));
+                }
+                if let Some(c) = ctx {
+                    c.request_repaint();
+                }
+            });
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = path;
+    }
+
+    fn finish_background_opens(&mut self) {
+        let prontos: Vec<_> = self.opening.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
+        for (name, path, r) in prontos {
+            match r {
+                Ok(bytes) => {
+                    if let Err(e) = self.open_bytes(&name, Some(path), bytes) {
+                        self.notify(format!("Couldn't open {name}: {e}"));
+                    }
+                }
+                Err(e) => self.notify(format!("Couldn't read {name}: {e}")),
+            }
+        }
+    }
+
+    /// New empty collection; returns its index.
+    pub fn create_collection(&mut self, name: &str) -> usize {
+        self.collections.push(folders::Collection { name: name.to_string(), files: Vec::new() });
+        self.collections.len() - 1
+    }
+
+    /// Show a collection on the Home tab.
+    pub fn open_collection(&mut self, i: usize) {
+        let Some(c) = self.collections.get(i) else { return };
+        self.folder = Some(folders::FolderView {
+            name: c.name.clone(),
+            path: String::new(),
+            files: folders::entries(&c.files),
+            filter: String::new(),
+            collection: Some(i),
+        });
+        self.active = None;
+    }
+
+    pub fn add_to_collection(&mut self, i: usize, paths: &[String]) {
+        let Some(c) = self.collections.get_mut(i) else { return };
+        for p in paths {
+            if !c.files.contains(p) {
+                c.files.push(p.clone());
+            }
+        }
+        let nome = c.name.clone();
+        self.notify(format!("Added to {nome}"));
+        self.refresh_collection_view(i);
+    }
+
+    pub fn remove_from_collection(&mut self, i: usize, path: &str) {
+        if let Some(c) = self.collections.get_mut(i) {
+            c.files.retain(|p| p != path);
+        }
+        self.refresh_collection_view(i);
+    }
+
+    pub fn delete_collection(&mut self, i: usize) {
+        if i < self.collections.len() {
+            self.collections.remove(i);
+        }
+        if self.folder.as_ref().is_some_and(|v| v.collection.is_some()) {
+            self.folder = None;
+        }
+    }
+
+    fn refresh_collection_view(&mut self, i: usize) {
+        if self.folder.as_ref().is_some_and(|v| v.collection == Some(i)) {
+            self.open_collection(i);
+        }
+    }
+
+    /// Ask for PDFs and add them to a collection.
+    pub fn add_files_dialog(&mut self, i: usize) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(ps) = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_title("Add PDFs to the collection").pick_files() {
+            let ps: Vec<String> = ps.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+            self.add_to_collection(i, &ps);
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = i;
+    }
+
+    /// Move a PDF on disk into another folder, keeping its progress and collections pointing at it.
+    pub fn move_file(&mut self, path: &str, dest_dir: &str) {
+        match folders::move_into(path, dest_dir) {
+            Ok(novo) => {
+                if let Some(p) = self.progress.remove(path) {
+                    self.progress.insert(novo.clone(), p);
+                }
+                for c in &mut self.collections {
+                    for f in &mut c.files {
+                        if f == path {
+                            f.clone_from(&novo);
+                        }
+                    }
+                }
+                self.recent.retain(|r| r.path != path);
+                self.notify(format!("Moved to {dest_dir}"));
+                // Refresh the list on screen.
+                match self.folder.as_ref().map(|v| (v.collection, v.path.clone())) {
+                    Some((Some(i), _)) => self.open_collection(i),
+                    Some((None, p)) if !p.is_empty() => self.open_folder(&p),
+                    _ => {}
+                }
+            }
+            Err(e) => self.notify(format!("Couldn't move the file: {e}")),
+        }
+    }
+
     /// Forget the reading progress of a file (page, furthest page, read mark).
     pub fn clear_progress(&mut self, path: &str) {
         self.progress.remove(path);
@@ -944,6 +1087,7 @@ impl PrintCraftApp {
             "progress": self.progress,
             "hide_community": self.hide_community,
             "favorite_tools": self.favorite_tools,
+            "collections": self.collections,
             "theme": self.theme,
             "language": self.language,
             "author": self.comment_prefs.author,
@@ -967,13 +1111,14 @@ impl PrintCraftApp {
         if let Ok(r) = serde_json::from_value::<Vec<RecentFile>>(v["recent"].clone()) {
             // Only keep entries whose files still exist.
             #[cfg(not(target_arch = "wasm32"))]
-            let r: Vec<RecentFile> = r.into_iter().filter(|f| std::path::Path::new(&f.path).exists()).collect();
+            let r: Vec<RecentFile> = r.into_iter().filter(|f| folders::is_network(&f.path) || std::path::Path::new(&f.path).exists()).collect();
             self.recent = r;
         }
         if let Ok(r) = serde_json::from_value::<Vec<folders::RecentFolder>>(v["recent_folders"].clone()) {
             // Only keep folders that still exist.
             #[cfg(not(target_arch = "wasm32"))]
-            let r: Vec<folders::RecentFolder> = r.into_iter().filter(|f| std::path::Path::new(&f.path).is_dir()).collect();
+            let r: Vec<folders::RecentFolder> =
+                r.into_iter().filter(|f| folders::is_network(&f.path) || std::path::Path::new(&f.path).is_dir()).collect();
             self.recent_folders = r;
         }
         if let Ok(p) = serde_json::from_value::<std::collections::HashMap<String, folders::Progress>>(v["progress"].clone()) {
@@ -984,6 +1129,9 @@ impl PrintCraftApp {
         }
         if let Ok(f) = serde_json::from_value::<Vec<String>>(v["favorite_tools"].clone()) {
             self.favorite_tools = f;
+        }
+        if let Ok(c) = serde_json::from_value::<Vec<folders::Collection>>(v["collections"].clone()) {
+            self.collections = c;
         }
         if let Ok(t) = serde_json::from_value::<ThemeKind>(v["theme"].clone()) {
             self.theme = t;
@@ -1307,6 +1455,7 @@ impl eframe::App for PrintCraftApp {
             }
         }
         self.track_progress();
+        self.finish_background_opens();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

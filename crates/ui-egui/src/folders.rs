@@ -86,6 +86,48 @@ pub struct FolderView {
     pub path: String,
     pub files: Vec<FolderEntry>,
     pub filter: String,
+    /// Set when the view shows a collection (virtual folder) instead of a folder on disk.
+    pub collection: Option<usize>,
+}
+
+/// A collection: a named list of PDFs from anywhere (a virtual folder; files stay where they are).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Collection {
+    pub name: String,
+    pub files: Vec<String>,
+}
+
+/// Network paths (\\server\share, //server/share): checking them can block for seconds when the
+/// server is down, so they are not checked at startup.
+pub fn is_network(path: &str) -> bool {
+    path.starts_with("\\\\") || path.starts_with("//")
+}
+
+/// Entries for a list of paths (a collection), in the order given. Missing files are kept (size 0).
+pub fn entries(paths: &[String]) -> Vec<FolderEntry> {
+    paths
+        .iter()
+        .map(|p| {
+            let name = Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
+            let size = if is_network(p) { 0 } else { std::fs::metadata(p).map(|m| m.len()).unwrap_or(0) };
+            FolderEntry { name: name.clone(), path: p.clone(), rel: name, size }
+        })
+        .collect()
+}
+
+/// Move a file into `dest_dir` (rename, or copy + delete across drives). Returns the new path.
+pub fn move_into(src: &str, dest_dir: &str) -> Result<String, String> {
+    let from = Path::new(src);
+    let name = from.file_name().ok_or("invalid file")?;
+    let to = Path::new(dest_dir).join(name);
+    if to.exists() {
+        return Err(format!("{} already exists there", name.to_string_lossy()));
+    }
+    if std::fs::rename(from, &to).is_err() {
+        std::fs::copy(from, &to).map_err(|e| e.to_string())?;
+        std::fs::remove_file(from).map_err(|e| e.to_string())?;
+    }
+    Ok(to.to_string_lossy().into_owned())
 }
 
 /// Natural ordering: runs of digits compare as numbers, the rest case-insensitively.
@@ -186,6 +228,23 @@ pub fn matches(entry: &FolderEntry, filter: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn move_into_moves_and_refuses_to_overwrite() {
+        let root = std::env::temp_dir().join(format!("printcraft-move-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("a")).unwrap();
+        std::fs::create_dir_all(root.join("b")).unwrap();
+        std::fs::write(root.join("a/x.pdf"), b"%PDF").unwrap();
+        let novo = move_into(&root.join("a/x.pdf").to_string_lossy(), &root.join("b").to_string_lossy()).unwrap();
+        assert!(Path::new(&novo).exists() && !root.join("a/x.pdf").exists());
+        std::fs::write(root.join("a/x.pdf"), b"%PDF").unwrap();
+        assert!(move_into(&root.join("a/x.pdf").to_string_lossy(), &root.join("b").to_string_lossy()).is_err());
+        let e = entries(&[novo.clone(), root.join("nao-existe.pdf").to_string_lossy().into_owned()]);
+        assert_eq!((e[0].name.as_str(), e[0].size, e[1].size), ("x.pdf", 4, 0));
+        assert!(is_network(r"\\server\share\a.pdf") && !is_network("C:/a.pdf"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn progress_tracks_furthest_page_and_read_flag() {
