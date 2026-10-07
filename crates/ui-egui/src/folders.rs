@@ -13,6 +13,47 @@ const MAX_DEPTH: usize = 6;
 const MAX_FILES: usize = 5000;
 pub const MAX_RECENT_FOLDERS: usize = 12;
 
+/// Reading progress of one PDF: where the reader is, how far they got, and whether they marked it read.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Progress {
+    /// Page shown when the file was last open (0-based); reopening the file goes back here.
+    pub page: usize,
+    /// Furthest page reached (0-based).
+    #[serde(default)]
+    pub max: usize,
+    pub pages: usize,
+    /// Marked as read by the user.
+    #[serde(default)]
+    pub read: bool,
+}
+
+impl Progress {
+    /// Share of the document read, 0.0–1.0 (1.0 when marked read).
+    pub fn fraction(&self) -> f32 {
+        if self.read {
+            1.0
+        } else if self.pages == 0 {
+            0.0
+        } else {
+            ((self.max + 1) as f32 / self.pages as f32).min(1.0)
+        }
+    }
+
+    /// Record that `page` of a `pages`-page document is on screen. Returns whether anything changed.
+    pub fn visit(&mut self, page: usize, pages: usize) -> bool {
+        let before = self.clone();
+        self.pages = pages;
+        self.page = page.min(pages.saturating_sub(1));
+        self.max = self.max.max(self.page);
+        *self != before
+    }
+}
+
+/// How many of `files` are marked read.
+pub fn read_count<'a>(files: impl Iterator<Item = &'a str>, progress: &std::collections::HashMap<String, Progress>) -> usize {
+    files.filter(|p| progress.get(*p).is_some_and(|x| x.read)).count()
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RecentFolder {
     pub name: String,
@@ -139,6 +180,24 @@ pub fn matches(entry: &FolderEntry, filter: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn progress_tracks_furthest_page_and_read_flag() {
+        let mut p = Progress::default();
+        assert!(p.visit(4, 10));
+        assert!(!p.visit(4, 10)); // same page: nothing to save
+        p.visit(2, 10); // going back keeps the furthest page
+        assert_eq!((p.page, p.max), (2, 4));
+        assert!((p.fraction() - 0.5).abs() < 1e-6);
+        p.visit(99, 10); // past the end clamps to the last page
+        assert_eq!(p.max, 9);
+        p.read = true;
+        assert!((p.fraction() - 1.0).abs() < 1e-6);
+        let mut m = std::collections::HashMap::new();
+        m.insert("a.pdf".to_string(), p);
+        m.insert("b.pdf".to_string(), Progress::default());
+        assert_eq!(read_count(["a.pdf", "b.pdf", "c.pdf"].into_iter(), &m), 1);
+    }
 
     #[test]
     fn natural_order_puts_2_before_10() {
