@@ -299,6 +299,13 @@ pub fn right_rail(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                 rail_button(ui, RightPanel::Accessibility, "accessibility", "Accessibility Checker", false);
             }
 
+            // Reading progress of this file (current page, or done when marked read).
+            let (lido, fracao) = {
+                let v = &app.views[index];
+                let p = app.session.get(v.id).and_then(|d| d.path.as_deref()).and_then(|p| app.progress.get(p));
+                let lido = p.is_some_and(|p| p.read);
+                (lido, if lido { 1.0 } else { (v.current + 1) as f32 / page_count.max(1) as f32 })
+            };
             // Page navigation cluster at the bottom (as in Acrobat's rail).
             let view = &mut app.views[index];
             ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
@@ -346,6 +353,20 @@ pub fn right_rail(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                         view.page_input = (view.current + 1).to_string();
                     }
                 }
+                // Reading progress: vertical bar filling top to bottom, percentage or ✓ when read.
+                ui.add_space(6.0);
+                let verde = egui::Color32::from_rgb(0x2E, 0xA0, 0x5A);
+                let laranja = egui::Color32::from_rgb(0xE8, 0xA3, 0x3D);
+                ui.label(
+                    egui::RichText::new(if lido { "read".to_string() } else { format!("{:.0}%", fracao * 100.0) })
+                        .font(theme::medium(10.5))
+                        .color(if lido { verde } else { t.text_muted }),
+                )
+                .on_hover_text("Reading progress — mark as read in the folder list");
+                let (barra, _) = ui.allocate_exact_size(vec2(6.0, 90.0), Sense::hover());
+                ui.painter().rect_filled(barra, CornerRadius::same(3), t.divider);
+                let feito = Rect::from_min_size(barra.min, vec2(barra.width(), barra.height() * fracao.clamp(0.0, 1.0)));
+                ui.painter().rect_filled(feito, CornerRadius::same(3), if lido { verde } else { laranja });
             });
         });
 }
