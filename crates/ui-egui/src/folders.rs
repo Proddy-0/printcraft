@@ -40,11 +40,17 @@ impl Progress {
     }
 
     /// Record that `page` of a `pages`-page document is on screen. Returns whether anything changed.
+    /// Reaching the last page for the first time marks the file read (it can be unmarked by hand).
     pub fn visit(&mut self, page: usize, pages: usize) -> bool {
         let before = self.clone();
+        let last = pages.saturating_sub(1);
         self.pages = pages;
-        self.page = page.min(pages.saturating_sub(1));
-        self.max = self.max.max(self.page);
+        self.page = page.min(last);
+        let new_max = self.max.max(self.page);
+        if pages > 0 && new_max == last && before.max < last {
+            self.read = true;
+        }
+        self.max = new_max;
         *self != before
     }
 }
@@ -189,8 +195,13 @@ mod tests {
         p.visit(2, 10); // going back keeps the furthest page
         assert_eq!((p.page, p.max), (2, 4));
         assert!((p.fraction() - 0.5).abs() < 1e-6);
-        p.visit(99, 10); // past the end clamps to the last page
+        assert!(!p.read);
+        p.visit(99, 10); // past the end clamps to the last page — and reaching it marks the file read
         assert_eq!(p.max, 9);
+        assert!(p.read);
+        p.read = false; // unmarked by hand: staying on the last page does not mark it again
+        p.visit(9, 10);
+        assert!(!p.read);
         p.read = true;
         assert!((p.fraction() - 1.0).abs() < 1e-6);
         let mut m = std::collections::HashMap::new();
