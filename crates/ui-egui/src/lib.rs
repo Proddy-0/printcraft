@@ -284,6 +284,9 @@ pub struct RecentFile {
     pub size: usize,
 }
 
+/// Files read on a thread, waiting to be opened: (name, path, bytes or error).
+type BackgroundOpens = std::sync::Arc<std::sync::Mutex<Vec<(String, String, Result<Vec<u8>, String>)>>>;
+
 pub struct PrintCraftApp {
     pub session: Session,
     pub views: Vec<DocView>,
@@ -325,7 +328,7 @@ pub struct PrintCraftApp {
     /// Home: scroll back to the top on the next frame.
     pub home_to_top: bool,
     /// Files read in the background (network shares are slow): (name, path, bytes or error).
-    opening: std::sync::Arc<std::sync::Mutex<Vec<(String, String, Result<Vec<u8>, String>)>>>,
+    opening: BackgroundOpens,
     pub toast: Option<(String, f64)>,
     /// Whether the macOS title bar is drawn by us (traffic lights over our tab strip).
     pub integrated_titlebar: bool,

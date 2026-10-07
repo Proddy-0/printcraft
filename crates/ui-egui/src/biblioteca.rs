@@ -9,6 +9,9 @@ use egui::{Align2, CornerRadius, Rect, Sense, Stroke, vec2};
 use crate::theme::{self, Tokens};
 use crate::{PrintCraftApp, folders, icons};
 
+/// Something to do with the app once a menu has finished drawing.
+type Acao = Option<Box<dyn FnOnce(&mut PrintCraftApp)>>;
+
 const LARANJA: egui::Color32 = egui::Color32::from_rgb(0xE8, 0xA3, 0x3D);
 const ROXO: egui::Color32 = egui::Color32::from_rgb(0x8E, 0x6B, 0xE8);
 
@@ -103,7 +106,7 @@ pub fn menu_abrir(app: &mut PrintCraftApp, resp: &egui::Response) {
     let t = Tokens::get(&resp.ctx);
     egui::Popup::menu(resp).align(egui::RectAlign::BOTTOM_START).gap(4.0).show(|ui| {
         ui.set_min_width(320.0);
-        let mut acao: Option<Box<dyn FnOnce(&mut PrintCraftApp)>> = None;
+        let mut acao: Acao = None;
         let linha = |ui: &mut egui::Ui, icone: &str, cor: egui::Color32, texto: &str, detalhe: &str| -> bool {
             let (row, r) = ui.allocate_exact_size(vec2(ui.available_width().max(320.0), 30.0), Sense::click());
             if r.hovered() {
@@ -163,7 +166,7 @@ pub fn menu_abrir(app: &mut PrintCraftApp, resp: &egui::Response) {
 pub fn menu_arquivo(app: &mut PrintCraftApp, resp: &egui::Response, path: &str) {
     let path = path.to_string();
     let colecoes: Vec<(usize, String)> = app.collections.iter().enumerate().map(|(i, c)| (i, c.name.clone())).collect();
-    let mut acao: Option<Box<dyn FnOnce(&mut PrintCraftApp)>> = None;
+    let mut acao: Acao = None;
     resp.context_menu(|ui| {
         ui.menu_button("Add to collection", |ui| {
             for (i, nome) in &colecoes {
