@@ -4,7 +4,7 @@ use egui::{Align2, CornerRadius, Rect, Sense, Stroke, vec2};
 use printcraft_engine::catalog;
 
 use crate::theme::{self, Tokens};
-use crate::{LeftPanel, PrintCraftApp, icons, panels::human_size, widgets};
+use crate::{LeftPanel, PrintCraftApp, folders, icons, panels::human_size, widgets};
 
 const RECOMMENDED: [&str; 5] = ["organize", "comment", "form", "edit", "protect"];
 
