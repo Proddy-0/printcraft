@@ -313,6 +313,10 @@ pub struct PrintCraftApp {
     pub folder: Option<folders::FolderView>,
     /// Reading progress per file path (page, furthest page, marked read).
     pub progress: std::collections::HashMap<String, folders::Progress>,
+    /// Home: community card hidden by the user (eye button).
+    pub hide_community: bool,
+    /// Home: tool groups the user starred, shown first ("My tools").
+    pub favorite_tools: Vec<String>,
     pub toast: Option<(String, f64)>,
     /// Whether the macOS title bar is drawn by us (traffic lights over our tab strip).
     pub integrated_titlebar: bool,
@@ -490,6 +494,8 @@ impl PrintCraftApp {
             recent_folders: Vec::new(),
             folder: None,
             progress: Default::default(),
+            hide_community: false,
+            favorite_tools: Vec::new(),
             toast: None,
             integrated_titlebar: false,
             password_prompt: None,
@@ -795,6 +801,25 @@ impl PrintCraftApp {
         }
     }
 
+    /// Forget the reading progress of a file (page, furthest page, read mark).
+    pub fn clear_progress(&mut self, path: &str) {
+        self.progress.remove(path);
+    }
+
+    /// Forget the reading progress of every file inside a folder.
+    pub fn clear_folder_progress(&mut self, folder: &str) {
+        self.progress.retain(|p, _| !folders::contains(folder, p));
+    }
+
+    /// Star or unstar a tool group on the Home tab.
+    pub fn toggle_favorite_tool(&mut self, id: &str) {
+        if let Some(i) = self.favorite_tools.iter().position(|f| f == id) {
+            self.favorite_tools.remove(i);
+        } else {
+            self.favorite_tools.push(id.to_string());
+        }
+    }
+
     /// Mark a file as read (or not read).
     pub fn set_read(&mut self, path: &str, read: bool) {
         self.progress.entry(path.to_string()).or_default().read = read;
@@ -917,6 +942,8 @@ impl PrintCraftApp {
             "recent": self.recent,
             "recent_folders": self.recent_folders,
             "progress": self.progress,
+            "hide_community": self.hide_community,
+            "favorite_tools": self.favorite_tools,
             "theme": self.theme,
             "language": self.language,
             "author": self.comment_prefs.author,
@@ -951,6 +978,12 @@ impl PrintCraftApp {
         }
         if let Ok(p) = serde_json::from_value::<std::collections::HashMap<String, folders::Progress>>(v["progress"].clone()) {
             self.progress = p;
+        }
+        if let Some(h) = v["hide_community"].as_bool() {
+            self.hide_community = h;
+        }
+        if let Ok(f) = serde_json::from_value::<Vec<String>>(v["favorite_tools"].clone()) {
+            self.favorite_tools = f;
         }
         if let Ok(t) = serde_json::from_value::<ThemeKind>(v["theme"].clone()) {
             self.theme = t;

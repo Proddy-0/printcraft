@@ -59,10 +59,28 @@ fn all_tools(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         let shown = if app.all_tools_expanded { TOOL_GROUPS.len() } else { COLLAPSED_TOOLS.min(TOOL_GROUPS.len()) };
+        let mut estrela = None;
         for g in &TOOL_GROUPS[..shown] {
-            if tool_row(ui, t, g).clicked() {
+            let resp = tool_row(ui, t, g);
+            // Star: add to / remove from "My tools" on the Home tab.
+            let fav = app.favorite_tools.iter().any(|f| f == g.id);
+            let star = Rect::from_center_size(resp.rect.left_center() + vec2(resp.rect.width() - 14.0, 0.0), vec2(22.0, 22.0));
+            let sr = ui.interact(star, resp.id.with("star"), Sense::click()).on_hover_text(if fav {
+                "Remove from My tools"
+            } else {
+                "Add to My tools (Home)"
+            });
+            if fav || resp.hovered() || sr.hovered() {
+                icons::paint(ui, star, "star", 14.0, if fav { Color32::from_rgb(0xF2, 0xB7, 0x05) } else { t.text_faint });
+            }
+            if sr.clicked() {
+                estrela = Some(g.id);
+            } else if resp.clicked() {
                 app.left = LeftPanel::Tool(g.id);
             }
+        }
+        if let Some(id) = estrela {
+            app.toggle_favorite_tool(id);
         }
         ui.add_space(4.0);
         let more = if app.all_tools_expanded { "View less" } else { "View more" };

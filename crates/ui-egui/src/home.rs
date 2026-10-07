@@ -12,31 +12,44 @@ pub fn show(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 36, right: 36, top: 28, bottom: 28 }).show(ui, |ui| {
-            ui.label(egui::RichText::new("Welcome to PrintCraft").font(theme::semibold(24.0)));
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Welcome to PrintCraft").font(theme::semibold(24.0)));
+                // The community card can be hidden; the eye here brings it back.
+                if app.hide_community && icons::button(ui, "eye", 26.0, false, "Show the community card").clicked() {
+                    app.hide_community = false;
+                }
+            });
             ui.label(
                 egui::RichText::new("An open-source PDF workbench — local, private, and scriptable.").color(t.text_muted).font(theme::regular(14.0)),
             );
             ui.add_space(14.0);
-            egui::Frame::NONE
-                .fill(t.card)
-                .stroke(Stroke::new(1.0, t.border))
-                .corner_radius(CornerRadius::same(12))
-                .inner_margin(egui::Margin::same(14))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal(|ui| {
-                        widgets::artcraft_mark(ui, 28.0);
-                        ui.vertical(|ui| {
-                            ui.label(egui::RichText::new("Join the ArtCraft community").font(theme::semibold(15.0)));
-                            ui.label(egui::RichText::new("Get help, share feedback and follow development on Discord.").color(t.text_muted));
+            if !app.hide_community {
+                egui::Frame::NONE
+                    .fill(t.card)
+                    .stroke(Stroke::new(1.0, t.border))
+                    .corner_radius(CornerRadius::same(12))
+                    .inner_margin(egui::Margin::same(14))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            widgets::artcraft_mark(ui, 28.0);
+                            ui.vertical(|ui| {
+                                ui.label(egui::RichText::new("Join the ArtCraft community").font(theme::semibold(15.0)));
+                                ui.label(egui::RichText::new("Get help, share feedback and follow development on Discord.").color(t.text_muted));
+                            });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                                if icons::button(ui, "eye-off", 26.0, false, "Hide this card").clicked() {
+                                    app.hide_community = true;
+                                }
+                            });
                         });
+                        ui.add_space(8.0);
+                        if let Some(cmd) = widgets::community_links(ui) {
+                            app.execute(cmd);
+                        }
                     });
-                    ui.add_space(8.0);
-                    if let Some(cmd) = widgets::community_links(ui) {
-                        app.execute(cmd);
-                    }
-                });
-            ui.add_space(22.0);
+                ui.add_space(22.0);
+            }
 
             egui::Frame::NONE
                 .fill(t.card)
@@ -45,12 +58,23 @@ pub fn show(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                 .inner_margin(egui::Margin::same(18))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(egui::RichText::new("Recommended tools").font(theme::semibold(15.0)));
+                    let titulo = if app.favorite_tools.is_empty() { "Recommended tools" } else { "My tools" };
+                    ui.label(egui::RichText::new(titulo).font(theme::semibold(15.0)));
+                    ui.label(
+                        egui::RichText::new("Star a tool to keep it here (also from All tools on the left).")
+                            .font(theme::regular(11.5))
+                            .color(t.text_faint),
+                    );
                     ui.add_space(10.0);
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing = vec2(14.0, 14.0);
-                        for id in RECOMMENDED {
+                        // Starred tools first (in the order they were starred), then the recommended ones.
+                        let mut ids: Vec<String> = app.favorite_tools.clone();
+                        ids.extend(RECOMMENDED.iter().map(|r| r.to_string()).filter(|r| !app.favorite_tools.contains(r)));
+                        let mut estrela: Option<String> = None;
+                        for id in &ids {
                             let Some(g) = catalog::group(id) else { continue };
+                            let fav = app.favorite_tools.iter().any(|f| f == id);
                             let (rect, resp) = ui.allocate_exact_size(vec2(190.0, 104.0), Sense::click());
                             resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, g.label));
                             let fill = if resp.hovered() { t.hover } else { t.card };
@@ -72,10 +96,24 @@ pub fn show(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                                 theme::medium(12.0),
                                 t.accent_text,
                             );
-                            if resp.clicked() {
+                            let star = Rect::from_center_size(rect.right_top() + vec2(-18.0, 18.0), vec2(24.0, 24.0));
+                            let sr = ui.interact(star, resp.id.with("star"), Sense::click()).on_hover_text(if fav {
+                                "Remove from My tools"
+                            } else {
+                                "Add to My tools"
+                            });
+                            if fav || resp.hovered() || sr.hovered() {
+                                icons::paint(ui, star, "star", 16.0, if fav { egui::Color32::from_rgb(0xF2, 0xB7, 0x05) } else { t.text_faint });
+                            }
+                            if sr.clicked() {
+                                estrela = Some(id.clone());
+                            } else if resp.clicked() {
                                 app.left = LeftPanel::Tool(g.id);
                                 app.left_open = true;
                             }
+                        }
+                        if let Some(id) = estrela {
+                            app.toggle_favorite_tool(&id);
                         }
                         let (rect, resp) = ui.allocate_exact_size(vec2(170.0, 104.0), Sense::click());
                         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Open file"));
@@ -265,11 +303,23 @@ fn folder_view(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     ui.label(egui::RichText::new(&view.path).font(theme::regular(11.0)).color(t.text_faint));
     ui.add_space(8.0);
-    ui.add(egui::TextEdit::singleline(&mut view.filter).hint_text("Filter by name or subfolder…").desired_width(320.0));
+    let pasta = view.path.clone();
+    let mut clear_all = false;
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(&mut view.filter).hint_text("Filter by name or subfolder…").desired_width(320.0));
+        if ui
+            .add(egui::Button::new(egui::RichText::new("Clear progress").font(theme::regular(12.0))))
+            .on_hover_text("Forget page, progress and read marks of every PDF in this folder")
+            .clicked()
+        {
+            clear_all = true;
+        }
+    });
     ui.add_space(8.0);
     let last = app.recent_folders.iter().find(|f| f.path == view.path).and_then(|f| f.last.clone());
     let progress = &app.progress;
     let mut toggle_read: Option<(String, bool)> = None;
+    let mut clear_one: Option<String> = None;
     let mut open = None;
     let mut group: Option<String> = None;
     let shown = view.files.iter().filter(|f| folders::matches(f, &view.filter)).count();
@@ -302,6 +352,20 @@ fn folder_view(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         ui.painter().text(rect.min + vec2(42.0, 16.0), Align2::LEFT_CENTER, &f.name, theme::medium(13.0), if read { t.text_muted } else { t.text });
         // Read toggle (right edge), then where the reader is.
         let toggle = Rect::from_center_size(rect.right_center() - vec2(22.0, 0.0), vec2(28.0, 28.0));
+        // Clear this file's progress (only when there is some).
+        let limpar = Rect::from_center_size(toggle.center() - vec2(30.0, 0.0), vec2(28.0, 28.0));
+        if prog.is_some() {
+            let lr = ui.interact(limpar, resp.id.with("clear"), Sense::click()).on_hover_text("Clear reading progress");
+            if lr.hovered() {
+                ui.painter().rect_filled(limpar, CornerRadius::same(6), t.pressed);
+            }
+            if resp.hovered() || lr.hovered() {
+                icons::paint(ui, limpar, "eraser", 16.0, t.text_muted);
+            }
+            if lr.clicked() {
+                clear_one = Some(f.path.clone());
+            }
+        }
         let tr = ui.interact(toggle, resp.id.with("read"), Sense::click()).on_hover_text(if read { "Mark as not read" } else { "Mark as read" });
         if tr.hovered() {
             ui.painter().rect_filled(toggle, CornerRadius::same(6), t.pressed);
@@ -322,7 +386,7 @@ fn folder_view(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             Some(p) if p.pages > 0 => format!("p. {} of {}{}  ·  {size}", p.page + 1, p.pages, if is_last { "  ·  last read" } else { "" }),
             _ => size,
         };
-        ui.painter().text(toggle.left_center() - vec2(10.0, 0.0), Align2::RIGHT_CENTER, status, theme::regular(12.0), t.text_muted);
+        ui.painter().text(limpar.left_center() - vec2(6.0, 0.0), Align2::RIGHT_CENTER, status, theme::regular(12.0), t.text_muted);
         // Progress bar under the name: furthest page reached.
         if let Some(p) = prog.filter(|p| p.pages > 0) {
             let bar = Rect::from_min_size(rect.min + vec2(42.0, 30.0), vec2((rect.width() * 0.35).clamp(80.0, 260.0), 4.0));
@@ -331,12 +395,20 @@ fn folder_view(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             let color = if p.read { egui::Color32::from_rgb(0x2E, 0xA0, 0x5A) } else { egui::Color32::from_rgb(0xE8, 0xA3, 0x3D) };
             ui.painter().rect_filled(done, CornerRadius::same(2), color);
         }
-        if resp.clicked() && !tr.clicked() {
+        if resp.clicked() && !tr.clicked() && clear_one.is_none() {
             open = Some(f.path.clone());
         }
     }
     if let Some((p, read)) = toggle_read {
         app.set_read(&p, read);
+        return;
+    }
+    if let Some(p) = clear_one {
+        app.clear_progress(&p);
+        return;
+    }
+    if clear_all {
+        app.clear_folder_progress(&pasta);
         return;
     }
     if back {
