@@ -10,7 +10,12 @@ const RECOMMENDED: [&str; 5] = ["organize", "comment", "form", "edit", "protect"
 
 pub fn show(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+    let area = ui.max_rect();
+    let mut rolagem = egui::ScrollArea::vertical().auto_shrink([false, false]);
+    if std::mem::take(&mut app.home_to_top) {
+        rolagem = rolagem.vertical_scroll_offset(0.0);
+    }
+    let saida = rolagem.show(ui, |ui| {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 36, right: 36, top: 28, bottom: 28 }).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Welcome to PrintCraft").font(theme::semibold(24.0)));
@@ -23,6 +28,8 @@ pub fn show(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                 egui::RichText::new("An open-source PDF workbench — local, private, and scriptable.").color(t.text_muted).font(theme::regular(14.0)),
             );
             ui.add_space(14.0);
+            crate::biblioteca::linha_abrir(app, ui, &t);
+            ui.add_space(18.0);
             if !app.hide_community {
                 egui::Frame::NONE
                     .fill(t.card)
@@ -115,37 +122,6 @@ pub fn show(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                         if let Some(id) = estrela {
                             app.toggle_favorite_tool(&id);
                         }
-                        let (rect, resp) = ui.allocate_exact_size(vec2(170.0, 104.0), Sense::click());
-                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Open file"));
-                        ui.painter().rect(
-                            rect,
-                            CornerRadius::same(10),
-                            if resp.hovered() { t.hover } else { t.pasteboard },
-                            Stroke::new(1.0, t.divider),
-                            egui::StrokeKind::Inside,
-                        );
-                        icons::paint(ui, Rect::from_center_size(rect.center() - vec2(0.0, 16.0), vec2(28.0, 28.0)), "folder-open", 26.0, t.icon);
-                        ui.painter().text(rect.center() + vec2(0.0, 22.0), Align2::CENTER_CENTER, "Open file", theme::semibold(13.0), t.text);
-                        if resp.clicked() {
-                            app.open_dialog();
-                        }
-                        #[cfg(not(target_arch = "wasm32"))]
-                        {
-                            let (rect, resp) = ui.allocate_exact_size(vec2(170.0, 104.0), Sense::click());
-                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Open folder"));
-                            ui.painter().rect(
-                                rect,
-                                CornerRadius::same(10),
-                                if resp.hovered() { t.hover } else { t.pasteboard },
-                                Stroke::new(1.0, t.divider),
-                                egui::StrokeKind::Inside,
-                            );
-                            icons::paint(ui, Rect::from_center_size(rect.center() - vec2(0.0, 16.0), vec2(28.0, 28.0)), "folder", 26.0, t.icon);
-                            ui.painter().text(rect.center() + vec2(0.0, 22.0), Align2::CENTER_CENTER, "Open folder", theme::semibold(13.0), t.text);
-                            if resp.clicked() {
-                                app.open_folder_dialog();
-                            }
-                        }
                     });
                 });
 
@@ -154,6 +130,7 @@ pub fn show(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                 folder_view(app, ui, &t);
                 return;
             }
+            crate::biblioteca::colecoes(app, ui, &t);
             ui.label(egui::RichText::new("Recent").font(theme::semibold(17.0)));
             ui.add_space(8.0);
             recent_folders(app, ui, &t);
@@ -191,8 +168,7 @@ pub fn show(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                 if let Some(i) = app.views.iter().position(|v| app.session.get(v.id).and_then(|d| d.path.as_deref()) == Some(p.as_str())) {
                     app.active = Some(i);
                 } else {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    app.open_path(&p);
+                    app.open_path_async(&p);
                 }
             }
             ui.add_space(20.0);
@@ -203,6 +179,7 @@ pub fn show(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
             );
         });
     });
+    crate::biblioteca::voltar_ao_topo(app, ui, saida.state.offset.y, area);
 }
 
 /// Recent folders: one line per folder, with how many PDFs it has and the last one read.
@@ -271,14 +248,9 @@ fn recent_folders(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
 }
 
-/// Switch to the tab of an already-open file, or open it.
+/// Switch to the tab of an already-open file, or open it (read in the background).
 fn open_file(app: &mut PrintCraftApp, path: &str) {
-    if let Some(i) = app.views.iter().position(|v| app.session.get(v.id).and_then(|d| d.path.as_deref()) == Some(path)) {
-        app.active = Some(i);
-    } else {
-        #[cfg(not(target_arch = "wasm32"))]
-        app.open_path(path);
-    }
+    app.open_path_async(path);
 }
 
 /// The PDFs of the open folder, grouped by subfolder, with a filter box.
@@ -304,7 +276,10 @@ fn folder_view(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     ui.label(egui::RichText::new(&view.path).font(theme::regular(11.0)).color(t.text_faint));
     ui.add_space(8.0);
     let pasta = view.path.clone();
+    let colecao = view.collection;
     let mut clear_all = false;
+    let mut add_pdfs = false;
+    let mut apagar_colecao = false;
     ui.horizontal(|ui| {
         ui.add(egui::TextEdit::singleline(&mut view.filter).hint_text("Filter by name or subfolder…").desired_width(320.0));
         if ui
@@ -314,12 +289,21 @@ fn folder_view(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         {
             clear_all = true;
         }
+        if colecao.is_some() {
+            if ui.button("Add PDFs…").clicked() {
+                add_pdfs = true;
+            }
+            if ui.button("Delete collection").on_hover_text("Deletes only the collection; the PDFs stay where they are").clicked() {
+                apagar_colecao = true;
+            }
+        }
     });
     ui.add_space(8.0);
     let last = app.recent_folders.iter().find(|f| f.path == view.path).and_then(|f| f.last.clone());
     let progress = &app.progress;
     let mut toggle_read: Option<(String, bool)> = None;
     let mut clear_one: Option<String> = None;
+    let mut menu_de: Vec<(egui::Response, String)> = Vec::new();
     let mut open = None;
     let mut group: Option<String> = None;
     let shown = view.files.iter().filter(|f| folders::matches(f, &view.filter)).count();
@@ -395,6 +379,7 @@ fn folder_view(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             let color = if p.read { egui::Color32::from_rgb(0x2E, 0xA0, 0x5A) } else { egui::Color32::from_rgb(0xE8, 0xA3, 0x3D) };
             ui.painter().rect_filled(done, CornerRadius::same(2), color);
         }
+        menu_de.push((resp.clone(), f.path.clone()));
         if resp.clicked() && !tr.clicked() && clear_one.is_none() {
             open = Some(f.path.clone());
         }
@@ -403,13 +388,29 @@ fn folder_view(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         app.set_read(&p, read);
         return;
     }
+    for (r, p) in menu_de {
+        crate::biblioteca::menu_arquivo(app, &r, &p);
+    }
     if let Some(p) = clear_one {
         app.clear_progress(&p);
         return;
     }
     if clear_all {
-        app.clear_folder_progress(&pasta);
+        match colecao.and_then(|i| app.collections.get(i)).map(|c| c.files.clone()) {
+            Some(files) => files.iter().for_each(|p| app.clear_progress(p)),
+            None => app.clear_folder_progress(&pasta),
+        }
         return;
+    }
+    if let Some(i) = colecao {
+        if add_pdfs {
+            app.add_files_dialog(i);
+            return;
+        }
+        if apagar_colecao {
+            app.delete_collection(i);
+            return;
+        }
     }
     if back {
         app.folder = None;

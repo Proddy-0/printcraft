@@ -39,9 +39,9 @@ pub fn tab_strip(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                     app.request_close_tab(i);
                 }
                 ui.add_space(4.0);
-                if widgets::ghost_button(ui, "plus", "Open").on_hover_text("Open a PDF (⌘O)").clicked() {
-                    app.open_dialog();
-                }
+                // Open: menu with Open file / Open folder and the folders, collections and files already added.
+                let abrir = widgets::ghost_button(ui, "plus", "Open").on_hover_text("Open a PDF, a folder or something you already added");
+                crate::biblioteca::menu_abrir(app, &abrir);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let (icon, next, tip) = match app.theme {
                         ThemeKind::Light => ("moon", ThemeKind::Dark, "Dark gray theme"),
