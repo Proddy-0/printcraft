@@ -54,10 +54,6 @@ pub fn tab_strip(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                     if icons::button(ui, "circle-help", 28.0, false, "Keyboard shortcuts").clicked() {
                         app.dialog = Some(Dialog::Shortcuts);
                     }
-                    // One click to the community, from anywhere in the app.
-                    if widgets::ghost_button(ui, "messages-square", "Discord").on_hover_text(printcraft_engine::links::DISCORD).clicked() {
-                        app.execute("help.discord");
-                    }
                 });
             });
         });
@@ -131,8 +127,8 @@ pub fn mode_bar(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
-                    let has_doc = app.active.is_some();
-                    ui.add_enabled_ui(has_doc, |ui| {
+                    // Document actions only when a document is open (fork: hidden on Home, not greyed out).
+                    if app.active.is_some() {
                         if icons::button(ui, "printer", 32.0, false, "Print (⌘P)").clicked() {
                             app.run_command("print.dialog");
                         }
@@ -142,7 +138,7 @@ pub fn mode_bar(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                         if icons::button(ui, "info", 32.0, false, "Document properties (⌘D)").clicked() {
                             app.dialog = Some(Dialog::Properties(PropsTab::Description));
                         }
-                    });
+                    }
                     ui.add_space(8.0);
                     if widgets::search_box(ui, "Find tools and commands", 260.0).clicked() {
                         app.palette_open = true;
@@ -156,8 +152,9 @@ fn main_menu(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
     let language = app.language;
     let t = Tokens::get(ui.ctx());
     let resp = widgets::ghost_button(ui, "panel-left", language.tr("Menu"));
-    egui::Popup::menu(&resp).show(|ui| {
-        ui.set_min_width(230.0);
+    // Fork: opens like the Open menu (below the button, same gap and width).
+    egui::Popup::menu(&resp).align(egui::RectAlign::BOTTOM_START).gap(4.0).show(|ui| {
+        ui.set_min_width(320.0);
         ui.menu_button(language.tr("File"), |ui| crate::commands::registry_menu(app, ui, "File"));
         ui.menu_button(language.tr("Edit"), |ui| crate::commands::registry_menu(app, ui, "Edit"));
         ui.menu_button(language.tr("Pages"), |ui| crate::commands::registry_menu(app, ui, "Pages"));

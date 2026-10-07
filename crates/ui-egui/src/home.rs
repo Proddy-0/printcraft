@@ -18,11 +18,7 @@ pub fn show(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
     let saida = rolagem.show(ui, |ui| {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 36, right: 36, top: 28, bottom: 28 }).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Welcome to PrintCraft").font(theme::semibold(24.0)));
-                // The community card can be hidden; the eye here brings it back.
-                if app.hide_community && icons::button(ui, "eye", 26.0, false, "Show the community card").clicked() {
-                    app.hide_community = false;
-                }
+                ui.label(egui::RichText::new("Welcome to Print Labs").font(theme::semibold(24.0)));
             });
             ui.label(
                 egui::RichText::new("An open-source PDF workbench — local, private, and scriptable.").color(t.text_muted).font(theme::regular(14.0)),
@@ -30,33 +26,6 @@ pub fn show(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
             ui.add_space(14.0);
             crate::biblioteca::linha_abrir(app, ui, &t);
             ui.add_space(18.0);
-            if !app.hide_community {
-                egui::Frame::NONE
-                    .fill(t.card)
-                    .stroke(Stroke::new(1.0, t.border))
-                    .corner_radius(CornerRadius::same(12))
-                    .inner_margin(egui::Margin::same(14))
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            widgets::artcraft_mark(ui, 28.0);
-                            ui.vertical(|ui| {
-                                ui.label(egui::RichText::new("Join the ArtCraft community").font(theme::semibold(15.0)));
-                                ui.label(egui::RichText::new("Get help, share feedback and follow development on Discord.").color(t.text_muted));
-                            });
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                                if icons::button(ui, "eye-off", 26.0, false, "Hide this card").clicked() {
-                                    app.hide_community = true;
-                                }
-                            });
-                        });
-                        ui.add_space(8.0);
-                        if let Some(cmd) = widgets::community_links(ui) {
-                            app.execute(cmd);
-                        }
-                    });
-                ui.add_space(22.0);
-            }
 
             egui::Frame::NONE
                 .fill(t.card)
@@ -135,11 +104,12 @@ pub fn show(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
             ui.add_space(8.0);
             recent_folders(app, ui, &t);
             if app.recent.is_empty() && app.recent_folders.is_empty() {
-                ui.label(egui::RichText::new("Files you open in PrintCraft appear here. Drop a PDF anywhere to open it.").color(t.text_muted));
+                ui.label(egui::RichText::new("Files you open in Print Labs appear here. Drop a PDF anywhere to open it. Drag a file or folder onto a collection to add it.").color(t.text_muted));
             }
             let mut open = None;
             for r in &app.recent {
-                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
+                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click_and_drag());
+                crate::biblioteca::arrastavel(ui, &resp, crate::biblioteca::Arrastado::Arquivo(r.path.clone()));
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &r.name));
                 if resp.hovered() {
                     ui.painter().rect_filled(rect, CornerRadius::same(8), t.hover);
@@ -174,7 +144,7 @@ pub fn show(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
             ui.add_space(20.0);
             widgets::section_title(ui, "Privacy");
             ui.label(
-                egui::RichText::new("PrintCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.")
+                egui::RichText::new("Print Labs works offline. No telemetry, no account, and no cloud processing unless you add a provider.")
                     .color(t.text_muted),
             );
         });
@@ -187,7 +157,8 @@ fn recent_folders(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let mut open = None;
     let mut resume = None;
     for f in &app.recent_folders {
-        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click_and_drag());
+        crate::biblioteca::arrastavel(ui, &resp, crate::biblioteca::Arrastado::Pasta(f.path.clone()));
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &f.name));
         if resp.hovered() {
             ui.painter().rect_filled(rect, CornerRadius::same(8), t.hover);

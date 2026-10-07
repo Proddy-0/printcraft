@@ -1472,7 +1472,7 @@ impl eframe::App for PrintCraftApp {
         let title = self
             .active
             .and_then(|i| self.session.get(self.views[i].id))
-            .map_or_else(|| "PrintCraft".to_owned(), |d| format!("{} — PrintCraft", d.display_name()));
+            .map_or_else(|| "Print Labs".to_owned(), |d| format!("{} — Print Labs", d.display_name()));
         if title != self.window_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.window_title = title;

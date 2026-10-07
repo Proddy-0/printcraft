@@ -1015,7 +1015,8 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 ui.horizontal(|ui| {
                     widgets::artcraft_mark(ui, 40.0);
                     ui.vertical(|ui| {
-                        ui.label(egui::RichText::new("PrintCraft").font(theme::semibold(20.0)));
+                        ui.label(egui::RichText::new("Print Labs").font(theme::semibold(20.0)));
+                        ui.label(egui::RichText::new("Proddyt Switch · fork of PrintCraft (ArtCraft)").color(t.text_muted).small());
                         ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
                     });
                 });

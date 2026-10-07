@@ -4,7 +4,6 @@
 /// The app's name in ArtCraft URLs (`getartcraft.com/apps/{APP}`, `github.com/storytold/{APP}`).
 pub const APP: &str = "printcraft";
 
-pub const DISCORD: &str = "https://discord.gg/artcraft";
 pub const WEBSITE: &str = "https://getartcraft.com";
 pub const APP_PAGE: &str = "https://getartcraft.com/apps/printcraft";
 pub const GITHUB: &str = "https://github.com/storytold/printcraft";
@@ -19,9 +18,8 @@ pub struct Link {
     pub icon: &'static str,
 }
 
-/// In the order they are shown. Discord comes first: it is where people get help fastest.
+/// In the order they are shown. (Fork: the upstream Discord link is left out.)
 pub const LINKS: &[Link] = &[
-    Link { command: "help.discord", label: "Join the ArtCraft Discord", url: DISCORD, icon: "messages-square" },
     Link { command: "help.app_page", label: "PrintCraft web page", url: APP_PAGE, icon: "globe" },
     Link { command: "help.github", label: "PrintCraft on GitHub", url: GITHUB, icon: "code-xml" },
     Link { command: "help.website", label: "ArtCraft website", url: WEBSITE, icon: "external-link" },

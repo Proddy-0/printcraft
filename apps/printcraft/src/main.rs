@@ -63,7 +63,7 @@ fn main() -> eframe::Result {
     }
     let integrated = cfg!(target_os = "macos");
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("PrintCraft")
+        .with_title("Print Labs")
         .with_inner_size([1440.0, 920.0])
         .with_min_inner_size([820.0, 520.0])
         .with_drag_and_drop(true)
