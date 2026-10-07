@@ -213,7 +213,9 @@ fn recent_folders(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             }
             label_left = r.left() - 12.0;
         }
-        ui.painter().text(egui::pos2(label_left, right.y), Align2::RIGHT_CENTER, format!("{} PDFs", f.count), theme::regular(12.0), t.text_muted);
+        let lidos = app.progress.iter().filter(|(p, x)| x.read && folders::contains(&f.path, p)).count();
+        let contagem = if lidos > 0 { format!("{lidos} of {} read", f.count) } else { format!("{} PDFs", f.count) };
+        ui.painter().text(egui::pos2(label_left, right.y), Align2::RIGHT_CENTER, contagem, theme::regular(12.0), t.text_muted);
         if resp.clicked() && resume.is_none() {
             open = Some(f.path.clone());
         }
@@ -258,13 +260,16 @@ fn folder_view(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         );
         ui.add_space(28.0);
         ui.label(egui::RichText::new(&view.name).font(theme::semibold(17.0)));
-        ui.label(egui::RichText::new(format!("{} PDFs", view.files.len())).color(t.text_muted));
+        let lidos = folders::read_count(view.files.iter().map(|f| f.path.as_str()), &app.progress);
+        ui.label(egui::RichText::new(format!("{} PDFs  ·  {lidos} read", view.files.len())).color(t.text_muted));
     });
     ui.label(egui::RichText::new(&view.path).font(theme::regular(11.0)).color(t.text_faint));
     ui.add_space(8.0);
     ui.add(egui::TextEdit::singleline(&mut view.filter).hint_text("Filter by name or subfolder…").desired_width(320.0));
     ui.add_space(8.0);
     let last = app.recent_folders.iter().find(|f| f.path == view.path).and_then(|f| f.last.clone());
+    let progress = &app.progress;
+    let mut toggle_read: Option<(String, bool)> = None;
     let mut open = None;
     let mut group: Option<String> = None;
     let shown = view.files.iter().filter(|f| folders::matches(f, &view.filter)).count();
@@ -282,28 +287,57 @@ fn folder_view(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 ui.label(egui::RichText::new(g).font(theme::semibold(13.0)).color(t.text_muted));
             }
         }
-        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::click());
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &f.name));
         let is_last = last.as_deref() == Some(f.path.as_str());
+        let prog = progress.get(&f.path);
+        let read = prog.is_some_and(|p| p.read);
         if resp.hovered() {
             ui.painter().rect_filled(rect, CornerRadius::same(8), t.hover);
         } else if is_last {
             ui.painter().rect_filled(rect, CornerRadius::same(8), t.accent_soft);
         }
+        let file_tint = if read { t.text_faint } else { egui::Color32::from_rgb(0xE0, 0x3E, 0x3E) };
+        icons::paint(ui, Rect::from_min_size(rect.min + vec2(10.0, 9.0), vec2(22.0, 22.0)), "file-text", 20.0, file_tint);
+        ui.painter().text(rect.min + vec2(42.0, 16.0), Align2::LEFT_CENTER, &f.name, theme::medium(13.0), if read { t.text_muted } else { t.text });
+        // Read toggle (right edge), then where the reader is.
+        let toggle = Rect::from_center_size(rect.right_center() - vec2(22.0, 0.0), vec2(28.0, 28.0));
+        let tr = ui.interact(toggle, resp.id.with("read"), Sense::click()).on_hover_text(if read { "Mark as not read" } else { "Mark as read" });
+        if tr.hovered() {
+            ui.painter().rect_filled(toggle, CornerRadius::same(6), t.pressed);
+        }
         icons::paint(
             ui,
-            Rect::from_min_size(rect.min + vec2(10.0, 7.0), vec2(22.0, 22.0)),
-            "file-text",
-            20.0,
-            egui::Color32::from_rgb(0xE0, 0x3E, 0x3E),
+            toggle,
+            if read { "circle-check" } else { "circle" },
+            18.0,
+            if read { egui::Color32::from_rgb(0x2E, 0xA0, 0x5A) } else { t.text_faint },
         );
-        ui.painter().text(rect.min + vec2(42.0, 18.0), Align2::LEFT_CENTER, &f.name, theme::medium(13.0), t.text);
+        if tr.clicked() {
+            toggle_read = Some((f.path.clone(), !read));
+        }
         let size = human_size(usize::try_from(f.size).unwrap_or(usize::MAX));
-        let right = if is_last { format!("last read  ·  {size}") } else { size };
-        ui.painter().text(rect.right_center() - vec2(12.0, 0.0), Align2::RIGHT_CENTER, right, theme::regular(12.0), t.text_muted);
-        if resp.clicked() {
+        let status = match prog {
+            Some(p) if p.read => format!("read  ·  {size}"),
+            Some(p) if p.pages > 0 => format!("p. {} of {}{}  ·  {size}", p.page + 1, p.pages, if is_last { "  ·  last read" } else { "" }),
+            _ => size,
+        };
+        ui.painter().text(toggle.left_center() - vec2(10.0, 0.0), Align2::RIGHT_CENTER, status, theme::regular(12.0), t.text_muted);
+        // Progress bar under the name: furthest page reached.
+        if let Some(p) = prog.filter(|p| p.pages > 0) {
+            let bar = Rect::from_min_size(rect.min + vec2(42.0, 30.0), vec2((rect.width() * 0.35).clamp(80.0, 260.0), 4.0));
+            ui.painter().rect_filled(bar, CornerRadius::same(2), t.divider);
+            let done = Rect::from_min_size(bar.min, vec2(bar.width() * p.fraction(), bar.height()));
+            let color = if p.read { egui::Color32::from_rgb(0x2E, 0xA0, 0x5A) } else { egui::Color32::from_rgb(0xE8, 0xA3, 0x3D) };
+            ui.painter().rect_filled(done, CornerRadius::same(2), color);
+        }
+        if resp.clicked() && !tr.clicked() {
             open = Some(f.path.clone());
         }
+    }
+    if let Some((p, read)) = toggle_read {
+        app.set_read(&p, read);
+        return;
     }
     if back {
         app.folder = None;

@@ -311,6 +311,8 @@ pub struct PrintCraftApp {
     pub recent_folders: Vec<folders::RecentFolder>,
     /// Folder being browsed on the Home tab.
     pub folder: Option<folders::FolderView>,
+    /// Reading progress per file path (page, furthest page, marked read).
+    pub progress: std::collections::HashMap<String, folders::Progress>,
     pub toast: Option<(String, f64)>,
     /// Whether the macOS title bar is drawn by us (traffic lights over our tab strip).
     pub integrated_titlebar: bool,
@@ -487,6 +489,7 @@ impl PrintCraftApp {
             recent: Vec::new(),
             recent_folders: Vec::new(),
             folder: None,
+            progress: Default::default(),
             toast: None,
             integrated_titlebar: false,
             password_prompt: None,
@@ -653,6 +656,14 @@ impl PrintCraftApp {
         self.views.push(DocView::new(id, &doc.info));
         self.active = Some(self.views.len() - 1);
         self.apply_initial_view(self.views.len() - 1, &initial);
+        // Reopening a file goes back to the page where it was left.
+        if let Some(pr) = path.as_ref().and_then(|p| self.progress.get(p))
+            && pr.page > 0
+            && pr.page < pages
+        {
+            let last = self.views.len() - 1;
+            self.views[last].go_to_page(pr.page);
+        }
         if let Some(p) = path {
             // A PDF inside a recent folder bumps the folder (and becomes its "Continue") instead of
             // adding one more line to Recent.
@@ -760,6 +771,33 @@ impl PrintCraftApp {
             }
             Err(e) => self.notify(format!("Couldn't read {name}: {e}")),
         }
+    }
+
+    /// Remember the page on screen of every open file that has a path (reading progress).
+    fn track_progress(&mut self) {
+        for view in &self.views {
+            let Some(doc) = self.session.get(view.id) else { continue };
+            let Some(path) = doc.path.as_deref() else { continue };
+            let pages = doc.info.pages.len();
+            if pages == 0 {
+                continue;
+            }
+            match self.progress.get_mut(path) {
+                Some(p) => {
+                    p.visit(view.current, pages);
+                }
+                None => {
+                    let mut p = folders::Progress::default();
+                    p.visit(view.current, pages);
+                    self.progress.insert(path.to_string(), p);
+                }
+            }
+        }
+    }
+
+    /// Mark a file as read (or not read).
+    pub fn set_read(&mut self, path: &str, read: bool) {
+        self.progress.entry(path.to_string()).or_default().read = read;
     }
 
     /// Pick a folder and browse its PDFs on the Home tab (desktop only).
@@ -878,6 +916,7 @@ impl PrintCraftApp {
         serde_json::json!({
             "recent": self.recent,
             "recent_folders": self.recent_folders,
+            "progress": self.progress,
             "theme": self.theme,
             "language": self.language,
             "author": self.comment_prefs.author,
@@ -909,6 +948,9 @@ impl PrintCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             let r: Vec<folders::RecentFolder> = r.into_iter().filter(|f| std::path::Path::new(&f.path).is_dir()).collect();
             self.recent_folders = r;
+        }
+        if let Ok(p) = serde_json::from_value::<std::collections::HashMap<String, folders::Progress>>(v["progress"].clone()) {
+            self.progress = p;
         }
         if let Ok(t) = serde_json::from_value::<ThemeKind>(v["theme"].clone()) {
             self.theme = t;
@@ -1231,6 +1273,7 @@ impl eframe::App for PrintCraftApp {
                 view.receive(ctx, &doc.renderer);
             }
         }
+        self.track_progress();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
