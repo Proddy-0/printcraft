@@ -45,6 +45,7 @@ mod edit_text_ui;
 mod editing;
 mod files;
 pub mod fill_sign;
+pub mod folders;
 pub mod forms_ui;
 mod home;
 mod icon_data;
@@ -306,6 +307,10 @@ pub struct PrintCraftApp {
     pub palette_query: String,
     pub all_tools_expanded: bool,
     pub recent: Vec<RecentFile>,
+    /// Folders opened as a whole (one Recent entry per folder, not per PDF).
+    pub recent_folders: Vec<folders::RecentFolder>,
+    /// Folder being browsed on the Home tab.
+    pub folder: Option<folders::FolderView>,
     pub toast: Option<(String, f64)>,
     /// Whether the macOS title bar is drawn by us (traffic lights over our tab strip).
     pub integrated_titlebar: bool,
@@ -480,6 +485,8 @@ impl PrintCraftApp {
             palette_query: String::new(),
             all_tools_expanded: false,
             recent: Vec::new(),
+            recent_folders: Vec::new(),
+            folder: None,
             toast: None,
             integrated_titlebar: false,
             password_prompt: None,
@@ -647,9 +654,15 @@ impl PrintCraftApp {
         self.active = Some(self.views.len() - 1);
         self.apply_initial_view(self.views.len() - 1, &initial);
         if let Some(p) = path {
-            self.recent.retain(|r| r.path != p);
-            self.recent.insert(0, RecentFile { name: name.to_string(), path: p, pages, size });
-            self.recent.truncate(12);
+            // A PDF inside a recent folder bumps the folder (and becomes its "Continue") instead of
+            // adding one more line to Recent.
+            if let Some(f) = self.recent_folders.iter().find(|f| folders::contains(&f.path, &p)).cloned() {
+                folders::bump(&mut self.recent_folders, folders::RecentFolder { last: Some(p), ..f });
+            } else {
+                self.recent.retain(|r| r.path != p);
+                self.recent.insert(0, RecentFile { name: name.to_string(), path: p, pages, size });
+                self.recent.truncate(12);
+            }
         }
         Ok(())
     }
@@ -749,6 +762,29 @@ impl PrintCraftApp {
         }
     }
 
+    /// Pick a folder and browse its PDFs on the Home tab (desktop only).
+    pub fn open_folder_dialog(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(p) = rfd::FileDialog::new().set_title("Open a folder of PDFs").pick_folder() {
+            self.open_folder(&p.to_string_lossy());
+        }
+    }
+
+    /// Show a folder's PDFs on the Home tab and put the folder first in Recent.
+    pub fn open_folder(&mut self, path: &str) {
+        let root = std::path::Path::new(path);
+        if !root.is_dir() {
+            self.recent_folders.retain(|f| f.path != path);
+            self.notify(format!("Couldn't open the folder {path}"));
+            return;
+        }
+        let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
+        let files = folders::scan(root);
+        folders::bump(&mut self.recent_folders, folders::RecentFolder { name: name.clone(), path: path.to_string(), count: files.len(), last: None });
+        self.folder = Some(folders::FolderView { name, path: path.to_string(), files, filter: String::new() });
+        self.active = None;
+    }
+
     pub fn open_dialog(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(p) =
@@ -841,6 +877,7 @@ impl PrintCraftApp {
         let trusted: Vec<String> = self.session.trusted_certificates().iter().map(printcraft_engine::sign::x509::to_pem).collect();
         serde_json::json!({
             "recent": self.recent,
+            "recent_folders": self.recent_folders,
             "theme": self.theme,
             "language": self.language,
             "author": self.comment_prefs.author,
@@ -866,6 +903,12 @@ impl PrintCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             let r: Vec<RecentFile> = r.into_iter().filter(|f| std::path::Path::new(&f.path).exists()).collect();
             self.recent = r;
+        }
+        if let Ok(r) = serde_json::from_value::<Vec<folders::RecentFolder>>(v["recent_folders"].clone()) {
+            // Only keep folders that still exist.
+            #[cfg(not(target_arch = "wasm32"))]
+            let r: Vec<folders::RecentFolder> = r.into_iter().filter(|f| std::path::Path::new(&f.path).is_dir()).collect();
+            self.recent_folders = r;
         }
         if let Ok(t) = serde_json::from_value::<ThemeKind>(v["theme"].clone()) {
             self.theme = t;
