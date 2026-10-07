@@ -1,6 +1,6 @@
 name: Sync upstream
 
-# Fork: brings storytold/printcraft main into this fork's main every day (GitHub's "Sync fork"),
+# Fork: brings the upstream (storytold) main into this fork's main every day (GitHub's "Sync fork"),
 # keeping the fork's own features. If the merge conflicts, the run fails and GitHub emails the owner.
 on:
   schedule:
