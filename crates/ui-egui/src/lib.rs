@@ -987,7 +987,7 @@ impl PrintCraftApp {
         let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
         let files = folders::scan(root);
         folders::bump(&mut self.recent_folders, folders::RecentFolder { name: name.clone(), path: path.to_string(), count: files.len(), last: None });
-        self.folder = Some(folders::FolderView { name, path: path.to_string(), files, filter: String::new() });
+        self.folder = Some(folders::FolderView { name, path: path.to_string(), files, filter: String::new(), collection: None });
         self.active = None;
     }
 
