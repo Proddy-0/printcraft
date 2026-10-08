@@ -668,6 +668,7 @@ pub enum BmAction {
     /// Fork: bookmarks from the document's headings (for PDFs that have none).
     FromHeadings,
     /// Make it the last child of the bookmark above it.
+    Indent(Vec<usize>),
     /// Move it out to follow its parent.
     Outdent(Vec<usize>),
 }
