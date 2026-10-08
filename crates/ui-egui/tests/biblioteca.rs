@@ -100,8 +100,10 @@ fn dropping_a_second_folder_below_the_list_makes_another_collection() {
     h.drop_at(to);
     h.run_steps(3);
     let cols: Vec<(String, usize)> = h.state().collections.iter().map(|c| (c.name.clone(), c.files.len())).collect();
+    let pasta = dir.file_name().unwrap().to_string_lossy().into_owned();
     let _ = std::fs::remove_dir_all(&dir);
-    assert_eq!(cols, vec![("Primeira".to_string(), 1), ("Segunda".to_string(), 1)]);
+    // The new collection is named after the folder on disk.
+    assert_eq!(cols, vec![("Primeira".to_string(), 1), (pasta, 1)]);
 }
 
 #[test]
