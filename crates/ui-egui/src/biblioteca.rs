@@ -95,10 +95,30 @@ pub fn colecoes(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     ui.label(egui::RichText::new("Collections").font(theme::semibold(17.0)));
     ui.add_space(8.0);
     let mut abrir = None;
+    let mut continuar = None;
     let mut alvos = Vec::new();
     for (i, c) in app.collections.iter().enumerate() {
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
         alvos.push((i, resp.clone(), rect));
+        let mut direita = rect.right_center().x - 12.0;
+        // "Continue" reopens the last PDF read from the collection.
+        if let Some(last) = &c.last {
+            let r = Rect::from_min_max(egui::pos2(direita - 84.0, rect.top() + 9.0), egui::pos2(direita, rect.bottom() - 9.0));
+            let cont = ui.interact(r, resp.id.with("continue"), Sense::click());
+            cont.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Continue"));
+            ui.painter().rect(
+                r,
+                CornerRadius::same(6),
+                if cont.hovered() { t.accent_soft } else { t.pasteboard },
+                Stroke::new(1.0, t.divider),
+                egui::StrokeKind::Inside,
+            );
+            ui.painter().text(r.center(), Align2::CENTER_CENTER, "Continue", theme::medium(12.0), t.accent_text);
+            if cont.clicked() {
+                continuar = Some((i, last.clone()));
+            }
+            direita = r.left() - 12.0;
+        }
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &c.name));
         if resp.hovered() {
             ui.painter().rect_filled(rect, CornerRadius::same(8), t.hover);
@@ -108,13 +128,21 @@ pub fn colecoes(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         ui.painter().text(rect.min + vec2(46.0, 32.0), Align2::LEFT_CENTER, "Collection", theme::regular(11.0), t.text_faint);
         let lidos = folders::read_count(c.files.iter().map(String::as_str), &app.progress);
         let detalhe = if lidos > 0 { format!("{lidos} of {} read", c.files.len()) } else { format!("{} PDFs", c.files.len()) };
-        ui.painter().text(rect.right_center() - vec2(12.0, 0.0), Align2::RIGHT_CENTER, detalhe, theme::regular(12.0), t.text_muted);
-        if resp.clicked() {
+        ui.painter().text(egui::pos2(direita, rect.center().y), Align2::RIGHT_CENTER, detalhe, theme::regular(12.0), t.text_muted);
+        if resp.clicked() && continuar.is_none() {
             abrir = Some(i);
         }
     }
     for (i, resp, rect) in alvos {
         soltar(app, ui, &resp, rect, Some(i));
+        menu_colecao(app, &resp, i);
+    }
+    if let Some((i, p)) = continuar {
+        if let Some(c) = app.collections.get_mut(i) {
+            c.last = Some(p.clone());
+        }
+        app.open_path_async(&p);
+        return;
     }
     // Dropping on a collection adds to it; dropping here makes another one.
     if arrastando {
@@ -226,12 +254,62 @@ pub fn menu_arquivo(app: &mut PrintCraftApp, resp: &egui::Response, path: &str) 
             }));
             ui.close();
         }
-        if let Some(i) = app.folder.as_ref().and_then(|v| v.collection)
-            && ui.button("Remove from this collection").clicked()
-        {
-            let p = path.clone();
-            acao = Some(Box::new(move |app| app.remove_from_collection(i, &p)));
-            ui.close();
+        match app.folder.as_ref().map(|v| (v.collection, v.path.clone())) {
+            // In a collection: move between its sections.
+            Some((Some(i), _)) => {
+                let secoes = app.collections.get(i).map(|c| c.sections.clone()).unwrap_or_default();
+                let atual = app.collections.get(i).and_then(|c| c.section_of.get(&path).cloned());
+                ui.menu_button("Move to section", |ui| {
+                    for s in &secoes {
+                        if atual.as_deref() != Some(s.as_str()) && ui.button(s).clicked() {
+                            let (p, s) = (path.clone(), s.clone());
+                            acao = Some(Box::new(move |app| app.set_section(i, &p, Some(&s))));
+                            ui.close();
+                        }
+                    }
+                    if atual.is_some() && ui.button("No section").clicked() {
+                        let p = path.clone();
+                        acao = Some(Box::new(move |app| app.set_section(i, &p, None)));
+                        ui.close();
+                    }
+                    ui.separator();
+                    ui.label(egui::RichText::new("New section").small());
+                    if let Some(nome) = campo_nome(ui, egui::Id::new(("nova-secao", &path)), "") {
+                        let p = path.clone();
+                        acao = Some(Box::new(move |app| app.set_section(i, &p, Some(&nome))));
+                        ui.close();
+                    }
+                });
+                if ui.button("Remove from this collection").clicked() {
+                    let p = path.clone();
+                    acao = Some(Box::new(move |app| app.remove_from_collection(i, &p)));
+                    ui.close();
+                }
+            }
+            // In a folder on disk: move the file into one of its subfolders (or back to the top).
+            #[cfg(not(target_arch = "wasm32"))]
+            Some((None, raiz)) if !raiz.is_empty() => {
+                let mut subs: Vec<String> = app
+                    .folder
+                    .as_ref()
+                    .map(|v| v.files.iter().filter_map(|f| f.rel.rsplit_once('/').map(|(d, _)| d.to_string())).collect())
+                    .unwrap_or_default();
+                subs.sort_by(|a, b| folders::natural_cmp(a, b));
+                subs.dedup();
+                let aqui = std::path::Path::new(&path).parent().map(|d| d.to_path_buf());
+                ui.menu_button("Move to subfolder", |ui| {
+                    let mut destinos: Vec<(String, std::path::PathBuf)> = vec![("(top of the folder)".into(), std::path::PathBuf::from(&raiz))];
+                    destinos.extend(subs.iter().map(|s| (s.clone(), std::path::Path::new(&raiz).join(s))));
+                    for (rotulo, dir) in destinos {
+                        if Some(&dir) != aqui.as_ref() && ui.button(rotulo).clicked() {
+                            let p = path.clone();
+                            acao = Some(Box::new(move |app| app.move_file(&p, &dir.to_string_lossy())));
+                            ui.close();
+                        }
+                    }
+                });
+            }
+            _ => {}
         }
     });
     if let Some(f) = acao {
@@ -272,12 +350,19 @@ impl Arrastado {
         std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone())
     }
 
-    /// The PDFs it stands for: the file itself, or every PDF in the folder.
-    fn arquivos(&self) -> Vec<String> {
+    /// The PDFs it stands for, each with the subfolder it sits in (a folder's subfolders
+    /// become sections of the collection).
+    fn arquivos(&self) -> Vec<(String, Option<String>)> {
         match self {
-            Arrastado::Arquivo(p) => vec![p.clone()],
+            Arrastado::Arquivo(p) => vec![(p.clone(), None)],
             #[cfg(not(target_arch = "wasm32"))]
-            Arrastado::Pasta(p) => folders::scan(std::path::Path::new(p)).into_iter().map(|e| e.path).collect(),
+            Arrastado::Pasta(p) => folders::scan(std::path::Path::new(p))
+                .into_iter()
+                .map(|e| {
+                    let sub = e.rel.rsplit_once('/').map(|(d, _)| d.to_string());
+                    (e.path, sub)
+                })
+                .collect(),
             #[cfg(target_arch = "wasm32")]
             Arrastado::Pasta(_) => Vec::new(),
         }
@@ -293,7 +378,7 @@ pub fn arrastavel(ui: &egui::Ui, resp: &egui::Response, item: Arrastado) {
     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     if let Some(pos) = ui.ctx().pointer_interact_pos() {
         let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("arrastando")));
-        let texto = format!("{}  →  collection", item.nome());
+        let texto = item.nome();
         let galley = painter.layout_no_wrap(texto, theme::medium(12.5), t.text);
         let rect = Rect::from_min_size(pos + vec2(14.0, 10.0), galley.size() + vec2(16.0, 10.0));
         painter.rect(rect, CornerRadius::same(6), t.card, Stroke::new(1.0, ROXO), egui::StrokeKind::Inside);
@@ -313,7 +398,89 @@ fn soltar(app: &mut PrintCraftApp, ui: &egui::Ui, resp: &egui::Response, rect: R
             app.notify("No PDFs to add".to_string());
             return;
         }
+        // Into a new collection, the folder's subfolders are the sections; into an existing one,
+        // the folder itself is a section (with its subfolders under it).
+        let pasta = matches!(*item, Arrastado::Pasta(_)).then(|| item.nome());
+        let arquivos: Vec<(String, Option<String>)> = match (destino, pasta) {
+            (Some(_), Some(nome)) => arquivos
+                .into_iter()
+                .map(|(f, sub)| {
+                    let s = match sub {
+                        Some(sub) => format!("{nome}/{sub}"),
+                        None => nome.clone(),
+                    };
+                    (f, Some(s))
+                })
+                .collect(),
+            _ => arquivos,
+        };
         let i = destino.unwrap_or_else(|| app.create_collection(&item.nome()));
-        app.add_to_collection(i, &arquivos);
+        app.add_to_collection_in(i, &arquivos);
+    }
+}
+
+/// A one-line name field with an OK button, kept between frames under `id`. Returns the name
+/// when confirmed (OK or Enter).
+pub fn campo_nome(ui: &mut egui::Ui, id: egui::Id, inicial: &str) -> Option<String> {
+    let mut texto: String = ui.data_mut(|d| d.get_temp(id)).unwrap_or_else(|| inicial.to_string());
+    let mut ok = false;
+    ui.horizontal(|ui| {
+        let r = ui.add(egui::TextEdit::singleline(&mut texto).desired_width(180.0).hint_text("Name"));
+        ok = ui.button("OK").clicked() || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+    });
+    if ok && !texto.trim().is_empty() {
+        ui.data_mut(|d| d.remove::<String>(id));
+        return Some(texto.trim().to_string());
+    }
+    ui.data_mut(|d| d.insert_temp(id, texto));
+    None
+}
+
+/// Right-click menu of a collection on Home: open, rename, delete.
+fn menu_colecao(app: &mut PrintCraftApp, resp: &egui::Response, i: usize) {
+    let nome = app.collections.get(i).map(|c| c.name.clone()).unwrap_or_default();
+    let mut acao: Acao = None;
+    resp.context_menu(|ui| {
+        if ui.button("Open").clicked() {
+            acao = Some(Box::new(move |app| app.open_collection(i)));
+            ui.close();
+        }
+        ui.menu_button("Rename", |ui| {
+            if let Some(novo) = campo_nome(ui, egui::Id::new(("renomear-colecao", i)), &nome) {
+                acao = Some(Box::new(move |app| app.rename_collection(i, &novo)));
+                ui.close();
+            }
+        });
+        ui.separator();
+        if ui.button("Delete collection").on_hover_text("Deletes only the collection; the PDFs stay where they are").clicked() {
+            acao = Some(Box::new(move |app| app.delete_collection(i)));
+            ui.close();
+        }
+    });
+    if let Some(f) = acao {
+        f(app);
+    }
+}
+
+/// Right-click menu of a section header in a collection: rename it or remove it.
+pub fn menu_secao(app: &mut PrintCraftApp, resp: &egui::Response, i: usize, secao: &str) {
+    let secao = secao.to_string();
+    let mut acao: Acao = None;
+    resp.context_menu(|ui| {
+        ui.menu_button("Rename section", |ui| {
+            if let Some(novo) = campo_nome(ui, egui::Id::new(("renomear-secao", i, &secao)), &secao) {
+                let s = secao.clone();
+                acao = Some(Box::new(move |app| app.rename_section(i, &s, &novo)));
+                ui.close();
+            }
+        });
+        if ui.button("Remove section").on_hover_text("The PDFs stay in the collection, without a section").clicked() {
+            let s = secao.clone();
+            acao = Some(Box::new(move |app| app.remove_section(i, &s)));
+            ui.close();
+        }
+    });
+    if let Some(f) = acao {
+        f(app);
     }
 }

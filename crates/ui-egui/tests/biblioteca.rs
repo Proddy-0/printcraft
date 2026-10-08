@@ -36,7 +36,7 @@ fn drag(h: &mut Harness<'static, PrintCraftApp>, from: egui::Pos2, to: egui::Pos
 fn dragging_a_recent_file_onto_a_collection_adds_it() {
     let mut h = harness(|app| {
         app.recent = vec![recent("chapter1.pdf", "/books/chapter1.pdf")];
-        app.collections = vec![folders::Collection { name: "Course".into(), files: Vec::new() }];
+        app.collections = vec![folders::Collection { name: "Course".into(), ..Default::default() }];
     });
     let (from, to) = (h.get_by_label("chapter1.pdf").rect().center(), h.get_by_label("Course").rect().center());
     drag(&mut h, from, to);
@@ -55,7 +55,7 @@ fn dragging_a_recent_folder_adds_its_pdfs() {
     let p = path.clone();
     let mut h = harness(move |app| {
         app.recent_folders = vec![folders::RecentFolder { name: "Livros".into(), path: p, count: 2, last: None }];
-        app.collections = vec![folders::Collection { name: "Course".into(), files: Vec::new() }];
+        app.collections = vec![folders::Collection { name: "Course".into(), ..Default::default() }];
     });
     let (from, to) = (h.get_by_label("Livros").rect().center(), h.get_by_label("Course").rect().center());
     drag(&mut h, from, to);
@@ -82,7 +82,7 @@ fn dropping_a_second_folder_below_the_list_makes_another_collection() {
     let p = dir.to_string_lossy().into_owned();
     let mut h = harness(move |app| {
         app.recent_folders = vec![folders::RecentFolder { name: "Segunda".into(), path: p, count: 1, last: None }];
-        app.collections = vec![folders::Collection { name: "Primeira".into(), files: vec!["/x/a.pdf".into()] }];
+        app.collections = vec![folders::Collection { name: "Primeira".into(), files: vec!["/x/a.pdf".into()], ..Default::default() }];
     });
     let from = h.get_by_label("Segunda").rect().center();
     h.hover_at(from);
@@ -146,4 +146,71 @@ fn rail_panels_open_in_read_mode() {
 #[test]
 fn new_sticky_notes_are_dots() {
     assert_eq!(printcraft_engine::NoteIcon::from_name("Circle"), Some(printcraft_engine::NoteIcon::Circle));
+}
+
+#[test]
+fn collection_sections_group_fold_and_move() {
+    let mut c =
+        folders::Collection { name: "Curso".into(), files: vec!["/a/1.pdf".into(), "/a/2.pdf".into(), "/b/3.pdf".into()], ..Default::default() };
+    c.set_section("/a/1.pdf", Some("Módulo 1"));
+    c.set_section("/b/3.pdf", Some("Módulo 2"));
+    let rels: Vec<String> = c.entries().into_iter().map(|e| e.rel).collect();
+    assert_eq!(rels, vec!["2.pdf", "Módulo 1/1.pdf", "Módulo 2/3.pdf"], "no section first, then sections in order");
+    c.rename_section("Módulo 2", "Módulo 1");
+    assert_eq!(c.sections, vec!["Módulo 1"], "renaming onto an existing section merges them");
+    c.remove_section("Módulo 1");
+    assert!(c.section_of.is_empty() && c.files.len() == 3, "removing a section keeps its PDFs");
+    c.set_section("/a/2.pdf", Some("X"));
+    c.renamed("/a/2.pdf", "/z/2.pdf");
+    assert_eq!(c.section_of.get("/z/2.pdf").map(String::as_str), Some("X"), "a moved file keeps its section");
+
+    // On screen: headers fold their PDFs away.
+    let col = c.clone();
+    let mut h = harness(move |app| {
+        app.collections = vec![col];
+        app.open_collection(0);
+    });
+    h.get_by_label("X");
+    assert!(h.query_by_label("2.pdf").is_some());
+    h.get_by_label("X").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("2.pdf").is_none(), "folded");
+}
+
+#[test]
+fn a_folder_with_subfolders_becomes_sections() {
+    let dir = std::env::temp_dir().join(format!("printlabs-secoes-{}", std::process::id()));
+    for f in ["livros 1/p1.pdf", "livros 1/p2.pdf", "livros 2/p3.pdf"] {
+        std::fs::create_dir_all(dir.join(f).parent().unwrap()).unwrap();
+        std::fs::write(dir.join(f), b"%PDF-1.7").unwrap();
+    }
+    let p = dir.to_string_lossy().into_owned();
+    let mut h = harness(move |app| {
+        app.recent_folders = vec![folders::RecentFolder { name: "Pasta main".into(), path: p, count: 3, last: None }];
+        app.collections = vec![folders::Collection { name: "Estudos".into(), ..Default::default() }];
+    });
+    let (from, to) = (h.get_by_label("Pasta main").rect().center(), h.get_by_label("Estudos").rect().center());
+    drag(&mut h, from, to);
+    let c = h.state().collections[0].clone();
+    let pasta = dir.file_name().unwrap().to_string_lossy().into_owned();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(c.files.len(), 3);
+    assert_eq!(c.sections, vec![format!("{pasta}/livros 1"), format!("{pasta}/livros 2")]);
+}
+
+#[test]
+fn a_collection_can_be_deleted_and_continued_from_home() {
+    let mut h = harness(|app| {
+        app.collections = vec![
+            folders::Collection { name: "Velha".into(), ..Default::default() },
+            folders::Collection { name: "Curso".into(), files: vec!["/c/a.pdf".into()], last: Some("/c/a.pdf".into()), ..Default::default() },
+        ];
+    });
+    h.get_by_label("Continue");
+    h.get_by_label("Velha").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Delete collection").click();
+    h.run_steps(2);
+    let nomes: Vec<String> = h.state().collections.iter().map(|c| c.name.clone()).collect();
+    assert_eq!(nomes, vec!["Curso"]);
 }

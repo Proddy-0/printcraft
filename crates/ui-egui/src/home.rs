@@ -270,10 +270,25 @@ fn folder_view(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     ui.add_space(8.0);
     let pasta = view.path.clone();
     let colecao = view.collection;
+    let last = match colecao {
+        Some(i) => app.collections.get(i).and_then(|c| c.last.clone()),
+        None => app.recent_folders.iter().find(|f| f.path == view.path).and_then(|f| f.last.clone()),
+    };
+    let mut continuar = false;
     let mut clear_all = false;
     let mut add_pdfs = false;
     let mut apagar_colecao = false;
     ui.horizontal(|ui| {
+        if let Some(l) = &last {
+            let nome = std::path::Path::new(l).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            if ui
+                .add(egui::Button::new(egui::RichText::new("Continue").font(theme::medium(12.5)).color(t.accent_text)))
+                .on_hover_text(format!("Reopen {nome}"))
+                .clicked()
+            {
+                continuar = true;
+            }
+        }
         ui.add(egui::TextEdit::singleline(&mut view.filter).hint_text("Filter by name or subfolder…").desired_width(320.0));
         if ui
             .add(egui::Button::new(egui::RichText::new("Clear progress").font(theme::regular(12.0))))
@@ -292,13 +307,20 @@ fn folder_view(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
     });
     ui.add_space(8.0);
-    let last = app.recent_folders.iter().find(|f| f.path == view.path).and_then(|f| f.last.clone());
     let progress = &app.progress;
     let mut toggle_read: Option<(String, bool)> = None;
     let mut clear_one: Option<String> = None;
     let mut menu_de: Vec<(egui::Response, String)> = Vec::new();
     let mut open = None;
     let mut group: Option<String> = None;
+    let mut dobrar: Option<String> = None;
+    let mut cabecalhos: Vec<(egui::Response, String)> = Vec::new();
+    let mut por_secao: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for f in view.files.iter().filter(|f| folders::matches(f, &view.filter)) {
+        if let Some((d, _)) = f.rel.rsplit_once('/') {
+            *por_secao.entry(d.to_string()).or_default() += 1;
+        }
+    }
     let shown = view.files.iter().filter(|f| folders::matches(f, &view.filter)).count();
     if shown == 0 {
         ui.label(
@@ -310,11 +332,41 @@ fn folder_view(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         if parent != group {
             group = parent.clone();
             if let Some(g) = &parent {
+                // Section header: click folds it; in a collection, drop a PDF here to move it in.
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new(g).font(theme::semibold(13.0)).color(t.text_muted));
+                let fechado = view.collapsed.contains(g);
+                let (hr, hresp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
+                hresp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, !fechado, g));
+                if hresp.hovered() {
+                    ui.painter().rect_filled(hr, CornerRadius::same(6), t.hover);
+                }
+                icons::paint(
+                    ui,
+                    Rect::from_min_size(hr.min + vec2(4.0, 5.0), vec2(16.0, 16.0)),
+                    if fechado { "chevron-right" } else { "chevron-down" },
+                    14.0,
+                    t.text_muted,
+                );
+                ui.painter().text(hr.left_center() + vec2(26.0, 0.0), Align2::LEFT_CENTER, g, theme::semibold(13.0), t.text_muted);
+                let n = por_secao.get(g).copied().unwrap_or(0);
+                ui.painter().text(hr.right_center() - vec2(10.0, 0.0), Align2::RIGHT_CENTER, format!("{n} PDFs"), theme::regular(11.5), t.text_faint);
+                if colecao.is_some() && hresp.dnd_hover_payload::<crate::biblioteca::Arrastado>().is_some() {
+                    ui.painter().rect_stroke(hr, CornerRadius::same(6), Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
+                }
+                if hresp.clicked() {
+                    dobrar = Some(g.clone());
+                }
+                cabecalhos.push((hresp, g.clone()));
             }
         }
-        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
+        if group.as_ref().is_some_and(|g| view.collapsed.contains(g)) {
+            continue;
+        }
+        let sentido = if colecao.is_some() { Sense::click_and_drag() } else { Sense::click() };
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), sentido);
+        if colecao.is_some() {
+            crate::biblioteca::arrastavel(ui, &resp, crate::biblioteca::Arrastado::Arquivo(f.path.clone()));
+        }
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &f.name));
         let is_last = last.as_deref() == Some(f.path.as_str());
         let prog = progress.get(&f.path);
@@ -377,6 +429,27 @@ fn folder_view(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             open = Some(f.path.clone());
         }
     }
+    if let Some(g) = dobrar
+        && let Some(v) = app.folder.as_mut()
+        && !v.collapsed.remove(&g)
+    {
+        v.collapsed.insert(g);
+    }
+    if let Some(i) = colecao {
+        for (r, g) in cabecalhos {
+            if let Some(item) = r.dnd_release_payload::<crate::biblioteca::Arrastado>()
+                && let crate::biblioteca::Arrastado::Arquivo(p) = &*item
+            {
+                app.set_section(i, p, Some(&g));
+                return;
+            }
+            crate::biblioteca::menu_secao(app, &r, i, &g);
+        }
+    }
+    if continuar && let Some(p) = last {
+        open_file(app, &p);
+        return;
+    }
     if let Some((p, read)) = toggle_read {
         app.set_read(&p, read);
         return;
@@ -408,6 +481,10 @@ fn folder_view(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if back {
         app.folder = None;
     } else if let Some(p) = open {
+        // A collection remembers the last PDF opened from it ("Continue").
+        if let Some(c) = colecao.and_then(|i| app.collections.get_mut(i)) {
+            c.last = Some(p.clone());
+        }
         open_file(app, &p);
     }
 }
