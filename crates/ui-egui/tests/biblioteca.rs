@@ -214,3 +214,17 @@ fn a_collection_can_be_deleted_and_continued_from_home() {
     let nomes: Vec<String> = h.state().collections.iter().map(|c| c.name.clone()).collect();
     assert_eq!(nomes, vec!["Curso"]);
 }
+
+#[test]
+fn bookmarks_panel_offers_to_create_them_from_headings() {
+    let pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF";
+    let mut h = harness(move |app| {
+        app.open_bytes("one.pdf", None, pdf.to_vec()).unwrap();
+        app.right = Some(printcraft_ui_egui::RightPanel::Bookmarks);
+    });
+    h.get_by_label("Create from headings").click();
+    h.run_steps(3);
+    // A page with no text has no headings: nothing is added, the user is told why.
+    let app = h.state();
+    assert!(app.session.get(app.views[0].id).unwrap().info.outline.is_empty());
+}

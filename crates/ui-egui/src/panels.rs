@@ -467,6 +467,12 @@ pub fn right_panel(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                         {
                             bm_action = Some(BmAction::New);
                         }
+                        if panel == RightPanel::Bookmarks
+                            && bm_editable
+                            && icons::button(ui, "wand-sparkles", 26.0, false, "Create bookmarks from headings").clicked()
+                        {
+                            bm_action = Some(BmAction::FromHeadings);
+                        }
                     });
                 });
                 ui.add_space(6.0);
@@ -479,6 +485,19 @@ pub fn right_panel(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Bookmarks => {
                         if info.outline.is_empty() {
                             empty(ui, &t, "bookmark", "This document has no bookmarks.");
+                            // Fork: build them from the headings (saved with the PDF).
+                            if bm_editable {
+                                ui.add_space(10.0);
+                                ui.vertical_centered(|ui| {
+                                    if ui
+                                        .button("Create from headings")
+                                        .on_hover_text("Finds the titles in the text and adds a bookmark for each; save to keep them")
+                                        .clicked()
+                                    {
+                                        bm_action = Some(BmAction::FromHeadings);
+                                    }
+                                });
+                            }
                         }
                         let mut ctx = OutlineCtx {
                             nav: &mut nav,
@@ -646,8 +665,9 @@ pub enum BmAction {
     Delete(Vec<usize>),
     MoveUp(Vec<usize>),
     MoveDown(Vec<usize>),
+    /// Fork: bookmarks from the document's headings (for PDFs that have none).
+    FromHeadings,
     /// Make it the last child of the bookmark above it.
-    Indent(Vec<usize>),
     /// Move it out to follow its parent.
     Outdent(Vec<usize>),
 }
