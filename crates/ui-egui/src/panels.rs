@@ -27,6 +27,7 @@ pub fn left_panel(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
         )
         .show(ui, |ui| match app.left {
             LeftPanel::AllTools => all_tools(app, ui, &t),
+            LeftPanel::Menu => crate::chrome::menu_panel(app, ui),
             LeftPanel::Tool(id) => match catalog::group(id) {
                 Some(g) => tool_detail(app, ui, &t, g),
                 None => app.left = LeftPanel::AllTools,

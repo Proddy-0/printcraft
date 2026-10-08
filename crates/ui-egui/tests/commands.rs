@@ -181,8 +181,7 @@ fn the_pages_menu_comes_from_the_registry() {
     let mut h = harness();
     h.get_by_label("Menu").click();
     h.run_steps(2);
-    h.get_by_label("Pages ⏵").hover();
-    h.run_steps(3);
+    // Fork: Menu is a side panel with its sections open.
     h.get_by_label_contains("Delete pages").click();
     h.run_steps(3);
     let app = h.state();

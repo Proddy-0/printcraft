@@ -100,7 +100,29 @@ pub fn show(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                 return;
             }
             crate::biblioteca::colecoes(app, ui, &t);
-            ui.label(egui::RichText::new("Recent").font(theme::semibold(17.0)));
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Recent").font(theme::semibold(17.0)));
+                // Fork: clear the Recent list (files, folders or both); the files themselves stay.
+                if !app.recent.is_empty() || !app.recent_folders.is_empty() {
+                    let limpar = icons::button(ui, "trash-2", 24.0, false, "Clear recent");
+                    egui::Popup::menu(&limpar).align(egui::RectAlign::BOTTOM_START).gap(4.0).show(|ui| {
+                        ui.set_min_width(200.0);
+                        if ui.add_enabled(!app.recent.is_empty(), egui::Button::new("Clear recent files")).clicked() {
+                            app.recent.clear();
+                            ui.close();
+                        }
+                        if ui.add_enabled(!app.recent_folders.is_empty(), egui::Button::new("Clear recent folders")).clicked() {
+                            app.recent_folders.clear();
+                            ui.close();
+                        }
+                        if ui.button("Clear all").clicked() {
+                            app.recent.clear();
+                            app.recent_folders.clear();
+                            ui.close();
+                        }
+                    });
+                }
+            });
             ui.add_space(8.0);
             recent_folders(app, ui, &t);
             if app.recent.is_empty() && app.recent_folders.is_empty() {

@@ -130,7 +130,7 @@ pub(crate) fn show(
                 let text = std::mem::take(&mut view.comments.add_box);
                 edit = Some(Edit::AddAnnotation(printcraft_engine::NewAnnotation {
                     page,
-                    shape: Shape::Note { at: [at[0] as f64, at[1] as f64], icon: NoteIcon::Comment },
+                    shape: Shape::Note { at: [at[0] as f64, at[1] as f64], icon: NoteIcon::Circle },
                     style: prefs.style(CommentTool::Note),
                     contents: text.trim().to_string(),
                     author: prefs.author.clone(),

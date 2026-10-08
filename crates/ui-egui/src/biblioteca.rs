@@ -71,16 +71,23 @@ pub fn linha_abrir(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
 }
 
+/// Drop zone that creates a collection named after what is dropped.
+fn zona_nova(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens, texto: &str) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 56.0), Sense::hover());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, texto));
+    ui.painter().rect(rect, CornerRadius::same(8), t.pasteboard, Stroke::new(1.0, t.divider), egui::StrokeKind::Inside);
+    icons::paint(ui, Rect::from_center_size(rect.left_center() + vec2(26.0, 0.0), vec2(20.0, 20.0)), "folder-plus", 18.0, ROXO);
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, texto, theme::medium(13.0), t.text_muted);
+    soltar(app, ui, &resp, rect, None);
+}
+
 /// Home section: collections (virtual folders) as cards.
 pub fn colecoes(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let arrastando = egui::DragAndDrop::has_payload_of_type::<Arrastado>(ui.ctx());
     if app.collections.is_empty() {
         // No collection yet: while something is dragged, offer a zone that creates one.
         if arrastando {
-            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 56.0), Sense::hover());
-            ui.painter().rect(rect, CornerRadius::same(8), t.pasteboard, Stroke::new(1.0, t.divider), egui::StrokeKind::Inside);
-            ui.painter().text(rect.center(), Align2::CENTER_CENTER, "Drop here to create a collection", theme::medium(13.0), t.text_muted);
-            soltar(app, ui, &resp, rect, None);
+            zona_nova(app, ui, t, "Drop here to create a collection");
             ui.add_space(16.0);
         }
         return;
@@ -109,8 +116,10 @@ pub fn colecoes(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     for (i, resp, rect) in alvos {
         soltar(app, ui, &resp, rect, Some(i));
     }
+    // Dropping on a collection adds to it; dropping here makes another one.
     if arrastando {
-        ui.label(egui::RichText::new("Drop on a collection to add it").color(t.text_faint).small());
+        ui.add_space(6.0);
+        zona_nova(app, ui, t, "Drop here to create a new collection");
     }
     if let Some(i) = abrir {
         app.open_collection(i);

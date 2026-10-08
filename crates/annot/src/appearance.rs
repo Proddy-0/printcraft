@@ -746,7 +746,11 @@ fn attach_icon(name: &str, col: Rgb) -> String {
 
 fn note_icon(name: &str, col: Rgb) -> String {
     let mut s = format!("{}0.25 0.25 0.25 RG 0.8 w 1 j 1 J\n", rg(col));
-    if name == "Comment" {
+    if name == "Circle" {
+        // Fork: a dot in the middle of the box.
+        s.push_str(&ellipse(5.0, 5.0, 15.0, 15.0));
+        s.push_str("B\n");
+    } else if name == "Comment" {
         s.push_str("3 18.5 m 17 18.5 l 18.5 18.5 18.5 17 18.5 17 c 18.5 8 l 18.5 6.5 17 6.5 17 6.5 c 9.5 6.5 l 5 2 l 5.5 6.5 l 3 6.5 l 1.5 6.5 1.5 8 1.5 8 c 1.5 17 l 1.5 18.5 3 18.5 3 18.5 c h B\n");
         s.push_str("4.5 15 m 15.5 15 l 4.5 12.5 m 15.5 12.5 l 4.5 10 m 11.5 10 l S\n");
     } else {

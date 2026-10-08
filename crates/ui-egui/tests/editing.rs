@@ -330,8 +330,7 @@ fn edit_menu_names_the_step_to_undo() {
     });
     h.get_by_label("Menu").click();
     h.run_steps(2);
-    h.get_by_label("Edit ⏵").hover(); // submenus open on hover; their labels carry the arrow
-    h.run_steps(3);
+    // Fork: Menu is a side panel with its sections open.
     h.get_by_label_contains("Undo Rotate page").click(); // the label includes the shortcut
     h.run_steps(3);
     let app = h.state();

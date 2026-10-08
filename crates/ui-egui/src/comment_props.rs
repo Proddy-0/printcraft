@@ -25,8 +25,16 @@ pub struct PropsDraft {
     pub edited: CommentProps,
 }
 
-const ICONS: [NoteIcon; 7] =
-    [NoteIcon::Comment, NoteIcon::Note, NoteIcon::Help, NoteIcon::Insert, NoteIcon::Key, NoteIcon::NewParagraph, NoteIcon::Paragraph];
+const ICONS: [NoteIcon; 8] = [
+    NoteIcon::Circle,
+    NoteIcon::Comment,
+    NoteIcon::Note,
+    NoteIcon::Help,
+    NoteIcon::Insert,
+    NoteIcon::Key,
+    NoteIcon::NewParagraph,
+    NoteIcon::Paragraph,
+];
 
 impl PrintCraftApp {
     /// Attach file: ask for a file (or take `attach_override`) and attach it at `at`.

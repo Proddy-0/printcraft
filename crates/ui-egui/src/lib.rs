@@ -92,6 +92,8 @@ pub enum Mode {
 pub enum LeftPanel {
     AllTools,
     Tool(&'static str),
+    /// Fork: the top-bar Menu (File, Edit, Pages, View, Help) as a side panel.
+    Menu,
 }
 
 /// Right-hand panels, opened from the rail.
@@ -1495,11 +1497,12 @@ impl eframe::App for PrintCraftApp {
         chrome::mode_bar(self, ui);
         if self.active.is_some() {
             chrome::right_rail(self, ui);
-            if self.right.is_some() && self.mode != Mode::Read {
+            // Fork: the rail's panels open in Read mode too (upstream hid them, so the rail did nothing).
+            if self.right.is_some() {
                 panels::right_panel(self, ui);
             }
         }
-        if self.left_open && self.mode != Mode::Read {
+        if self.left_open && (self.mode != Mode::Read || self.left == LeftPanel::Menu) {
             panels::left_panel(self, ui);
         }
         let t = theme::Tokens::get(&ctx);
