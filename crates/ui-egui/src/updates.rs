@@ -79,14 +79,25 @@ fn parse(v: &str) -> Option<(u64, u64, u64, u64)> {
 
 /// The releases newer than `current`, newest first. When `current` is one of the listed tags, the
 /// ones published after it are newer (two builds of the same day share a date); otherwise the
-/// version numbers and build dates decide.
-pub fn newer<'a>(releases: &'a [Release], current: &str) -> &'a [Release] {
+/// version numbers and build dates decide (so a build from source, whose version is the bare
+/// `0.2.1`, sees every `0.2.1-labs.*` release as newer).
+pub fn newer<'a>(releases: &'a [Release], current: &str) -> Vec<&'a Release> {
     let current = current.trim();
     if let Some(i) = releases.iter().position(|r| r.version == current) {
-        return &releases[..i];
+        return releases[..i].iter().collect();
     }
-    let n = releases.iter().take_while(|r| is_newer(&r.version, current)).count();
-    &releases[..n]
+    releases.iter().filter(|r| is_newer(&r.version, current)).collect()
+}
+
+/// Whether `url` is `prefix` followed by a plain path: no query, fragment, escapes, `..`, spaces
+/// or control characters (release answers are untrusted).
+pub fn under(url: &str, prefix: &str) -> bool {
+    url.strip_prefix(prefix).is_some_and(|rest| {
+        (prefix.ends_with('/') || rest.starts_with('/'))
+            && !rest.trim_start_matches('/').is_empty()
+            && rest.chars().all(|c| c.is_ascii_graphic() && !matches!(c, '?' | '#' | '\\' | '%'))
+            && !rest.contains("..")
+    })
 }
 
 /// The file of `release` to download for this computer, or `None` (then its page is offered).
@@ -195,7 +206,6 @@ impl PrintCraftApp {
         if running(&self.updates.check) {
             return;
         }
-        self.updates.last_check = now();
         let (tx, rx) = std::sync::mpsc::channel();
         let ctx = self.ctx.clone();
         std::thread::spawn(move || {
@@ -214,7 +224,8 @@ impl PrintCraftApp {
         {
             if !self.updates.started && self.update_source.is_some() {
                 self.updates.started = true;
-                if self.updates.at_start && now().saturating_sub(self.updates.last_check) >= DAY {
+                let since = now().checked_sub(self.updates.last_check);
+                if self.updates.at_start && since.is_none_or(|s| s >= DAY) {
                     self.updates.quiet = true;
                     self.start_check();
                 }
@@ -231,6 +242,9 @@ impl PrintCraftApp {
                     && self.updates.ignored.as_deref() != Some(newest.version.as_str())
                 {
                     self.updates.notice = true;
+                }
+                if result.is_ok() {
+                    self.updates.last_check = now();
                 }
                 self.updates.picked = None;
                 self.updates.check = Check::Done(result);
@@ -255,7 +269,7 @@ fn short(tag: &str) -> &str {
 /// The notice in the top-right corner after a start-up check found a newer release.
 fn notice(app: &mut PrintCraftApp, ctx: &egui::Context) {
     let Check::Done(Ok(list)) = &app.updates.check else { return };
-    let Some(newest) = newer(list, &app.installed_version).first().cloned() else { return };
+    let Some(newest) = newer(list, &app.installed_version).first().map(|r| (*r).clone()) else { return };
     let t = theme::Tokens::get(ctx);
     let (mut view, mut ignore, mut close) = (false, false, false);
     egui::Area::new(egui::Id::new("update-notice"))
@@ -336,7 +350,8 @@ pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 }
                 ui.label(egui::RichText::new(format!("You have {}.", short(&current))).color(t.text_muted));
                 ui.add_space(8.0);
-                let picked = app.updates.picked.get_or_insert_with(|| fresh.first().or(list.first()).map(|r| r.version.clone()).unwrap_or_default());
+                let picked =
+                    app.updates.picked.get_or_insert_with(|| fresh.first().copied().or(list.first()).map(|r| r.version.clone()).unwrap_or_default());
                 egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
                     for r in list.iter().take(LISTED) {
                         let mut label = short(&r.version).to_string();
@@ -348,7 +363,7 @@ pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
                         ui.radio_value(picked, r.version.clone(), label);
                     }
                 });
-                let chosen = list.iter().find(|r| &r.version == picked);
+                let chosen = list.iter().find(|r| &r.version == picked).or(list.first());
                 ui.add_space(6.0);
                 ui.label(
                     egui::RichText::new(match install {

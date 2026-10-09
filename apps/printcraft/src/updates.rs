@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use printcraft_ui_egui::updates::{DOWNLOADS, Install, LISTED, RELEASES_PAGE, Release};
+use printcraft_ui_egui::updates::{DOWNLOADS, Install, LISTED, RELEASES_PAGE, Release, under};
 
 const RELEASES: &str = "https://api.github.com/repos/Proddyt-Labs/print-labs/releases?per_page=10";
 
@@ -36,10 +36,6 @@ fn os_roots() -> Result<ureq::tls::RootCerts, String> {
     Ok(ureq::tls::RootCerts::new_with_certs(&certs))
 }
 
-fn ours(url: &str, prefix: &str) -> bool {
-    url.strip_prefix(prefix).is_some_and(|rest| !rest.is_empty() && !rest.contains(['?', '#', '\\']) && !rest.contains(".."))
-}
-
 fn parse(body: &str) -> Result<Vec<Release>, String> {
     let v: serde_json::Value = serde_json::from_str(body).map_err(|e| format!("unreadable answer ({e})"))?;
     let list = v.as_array().ok_or("no release found")?;
@@ -48,14 +44,14 @@ fn parse(body: &str) -> Result<Vec<Release>, String> {
         .filter(|r| !r["draft"].as_bool().unwrap_or(false))
         .filter_map(|r| {
             let version = r["tag_name"].as_str().filter(|t| !t.is_empty() && t.len() <= 64)?.to_string();
-            let url = r["html_url"].as_str().filter(|u| ours(u, RELEASES_PAGE)).unwrap_or(RELEASES_PAGE).to_string();
+            let url = r["html_url"].as_str().filter(|u| under(u, RELEASES_PAGE)).unwrap_or(RELEASES_PAGE).to_string();
             let assets = r["assets"]
                 .as_array()
                 .map(|a| {
                     a.iter()
                         .filter_map(|f| {
                             let name = f["name"].as_str().filter(|n| !n.is_empty() && n.len() <= 128)?;
-                            let link = f["browser_download_url"].as_str().filter(|u| ours(u, DOWNLOADS))?;
+                            let link = f["browser_download_url"].as_str().filter(|u| under(u, DOWNLOADS))?;
                             Some((name.to_string(), link.to_string()))
                         })
                         .collect()
@@ -104,6 +100,16 @@ mod tests {
         assert_eq!(r[0].assets.len(), 1, "{:?}", r[0].assets);
         assert_eq!(r[0].assets[0].0, "printcraft-windows-x64-setup.exe");
         assert_eq!(r[1].url, RELEASES_PAGE, "a link elsewhere falls back to the list");
+        for elsewhere in [
+            "https://example.com/printcraft.exe",
+            "https://github.com/Proddyt-Labs/print-labs/releases.evil/x",
+            "https://github.com/Proddyt-Labs/print-labs/releases/tag/%2e%2e",
+            "https://github.com/Proddyt-Labs/print-labs/releases/tag/a b",
+            "javascript:alert(1)",
+        ] {
+            let r = parse(&format!(r#"[{{"tag_name":"v9.9.9","html_url":"{elsewhere}"}}]"#)).unwrap();
+            assert_eq!(r[0].url, RELEASES_PAGE, "{elsewhere}");
+        }
         assert!(parse(r#"{"message":"Not Found"}"#).is_err());
         assert!(parse("[]").is_err());
         assert!(parse("<html>").is_err());
