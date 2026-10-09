@@ -1,22 +1,20 @@
 //! Asks GitHub for the Print Labs releases (Help ▸ Check for updates; Proddyt Switch, LABS-156),
-//! and tells which release this copy is and how it was installed.
+//! tells which release this copy is and how it was installed, and on Windows updates it by itself:
+//! the new installer or portable archive is downloaded, and a small PowerShell helper waits for
+//! the app to quit, installs it (silent installer, or the archive unpacked over this folder) and
+//! reopens the app.
 
 use std::path::Path;
 use std::time::Duration;
 
-use printcraft_ui_egui::updates::{DOWNLOADS, Install, LISTED, RELEASES_PAGE, Release, under};
+use printcraft_ui_egui::updates::{DOWNLOADS, Install, LISTED, RELEASES_PAGE, Release, download_for, under};
 
 const RELEASES: &str = "https://api.github.com/repos/Proddyt-Labs/print-labs/releases?per_page=10";
 
 /// The latest releases, newest first. The answer is untrusted: its size is capped, only pages
 /// under [`RELEASES_PAGE`] and files under [`DOWNLOADS`] are kept, and drafts are skipped.
 pub fn releases() -> Result<Vec<Release>, String> {
-    let agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(10)))
-        .tls_config(ureq::tls::TlsConfig::builder().root_certs(os_roots()?).build())
-        .build()
-        .new_agent();
-    let mut response = agent
+    let mut response = agent(Duration::from_secs(10))?
         .get(RELEASES)
         .header("Accept", "application/vnd.github+json")
         .header("User-Agent", concat!("PrintLabs/", env!("CARGO_PKG_VERSION")))
@@ -24,6 +22,92 @@ pub fn releases() -> Result<Vec<Release>, String> {
         .map_err(|e| format!("couldn't reach GitHub ({e})"))?;
     let body = response.body_mut().with_config().limit(4 << 20).read_to_string().map_err(|e| format!("unreadable answer ({e})"))?;
     parse(&body)
+}
+
+fn agent(timeout: Duration) -> Result<ureq::Agent, String> {
+    Ok(ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .tls_config(ureq::tls::TlsConfig::builder().root_certs(os_roots()?).build())
+        .build()
+        .new_agent())
+}
+
+/// The largest file an update may download.
+const MAX_DOWNLOAD: u64 = 512 << 20;
+
+/// Waits for the app (`-AppPid`) to quit, installs the update and reopens the app.
+const HELPER: &str = r#"param([int]$AppPid, [string]$Kind, [string]$File, [string]$Dir, [string]$Exe)
+$ErrorActionPreference = 'Stop'
+$log = Join-Path $env:TEMP 'print-labs-update.log'
+try {
+    Wait-Process -Id $AppPid -ErrorAction SilentlyContinue
+    if ($Kind -eq 'installed') {
+        $p = Start-Process -FilePath $File -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+        if ($p.ExitCode -ne 0) { throw "installer exit $($p.ExitCode)" }
+    } else {
+        $x = Join-Path $env:TEMP ('print-labs-' + [guid]::NewGuid())
+        Expand-Archive -Path $File -DestinationPath $x
+        $src = Get-ChildItem $x -Directory | Select-Object -First 1
+        Copy-Item (Join-Path $src.FullName '*') $Dir -Recurse -Force
+        Remove-Item $x -Recurse -Force
+    }
+    Add-Content $log "$(Get-Date -Format s) updated ($Kind)"
+} catch {
+    Add-Content $log "$(Get-Date -Format s) failed: $($_.Exception.Message)"
+} finally {
+    Remove-Item $File -Force -ErrorAction SilentlyContinue
+    Start-Process -FilePath $Exe
+}
+"#;
+
+/// Downloads `release` for this copy and starts the helper that installs it once the app quits.
+/// Windows only; elsewhere the dialog offers the download instead.
+pub fn apply(release: Release, install: Install) -> Result<(), String> {
+    if !cfg!(windows) {
+        return Err("automatic updates are Windows-only".into());
+    }
+    let url = download_for(&release, install).ok_or("this release has no file for this computer")?.to_string();
+    let exe = std::env::current_exe().map_err(|e| format!("can't find the program ({e})"))?;
+    let dir = exe.parent().ok_or("can't find the program's folder")?.to_path_buf();
+    let work = std::env::temp_dir().join("print-labs-update");
+    std::fs::create_dir_all(&work).map_err(|e| format!("can't prepare the download ({e})"))?;
+    let name = url.rsplit('/').next().filter(|n| !n.is_empty()).unwrap_or("update.bin");
+    let file = work.join(name);
+    download(&url, &file)?;
+    let helper = work.join("update.ps1");
+    std::fs::write(&helper, HELPER).map_err(|e| format!("can't prepare the update ({e})"))?;
+    let kind = if install == Install::Installed { "installed" } else { "portable" };
+    let mut cmd = std::process::Command::new("powershell.exe");
+    cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"])
+        .arg(&helper)
+        .args(["-AppPid", &std::process::id().to_string(), "-Kind", kind, "-File"])
+        .arg(&file)
+        .arg("-Dir")
+        .arg(&dir)
+        .arg("-Exe")
+        .arg(&exe);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd.spawn().map_err(|e| format!("can't start the updater ({e})"))?;
+    Ok(())
+}
+
+fn download(url: &str, to: &Path) -> Result<(), String> {
+    let mut response = agent(Duration::from_secs(600))?
+        .get(url)
+        .header("User-Agent", concat!("PrintLabs/", env!("CARGO_PKG_VERSION")))
+        .call()
+        .map_err(|e| format!("couldn't download the update ({e})"))?;
+    let mut reader = response.body_mut().with_config().limit(MAX_DOWNLOAD).reader();
+    let part = to.with_extension("part");
+    let mut out = std::fs::File::create(&part).map_err(|e| format!("can't save the update ({e})"))?;
+    std::io::copy(&mut reader, &mut out).map_err(|e| format!("the download stopped ({e})"))?;
+    drop(out);
+    std::fs::rename(&part, to).map_err(|e| format!("can't save the update ({e})"))
 }
 
 /// The certificate authorities the operating system trusts.

@@ -4,9 +4,11 @@
 //! The desktop app supplies how to ask ([`PrintCraftApp::update_source`]) and what is installed
 //! ([`PrintCraftApp::installed_version`], [`PrintCraftApp::install`]), so this crate has no
 //! network code; without a source (the web build) the command opens the releases page.
-//! Nothing is ever installed automatically: the user downloads the installer or the portable
-//! archive and runs or unpacks it. A quiet check runs at start at most once a day (it can be turned
-//! off in the dialog); a newer release shows a notice that can be dismissed or ignored for good.
+//! At every start a quiet check runs (it can be turned off in the dialog). When a newer release is
+//! out and the app knows how to install it ([`PrintCraftApp::update_apply`]: the desktop app on
+//! Windows), it downloads it, closes and reopens updated, like other self-updating apps; unsaved
+//! work is never closed without asking. Otherwise a notice offers the release, which can be
+//! dismissed or skipped for good.
 
 use std::sync::Arc;
 
@@ -20,9 +22,6 @@ pub const RELEASES_PAGE: &str = "https://github.com/Proddyt-Labs/print-labs/rele
 pub const DOWNLOADS: &str = "https://github.com/Proddyt-Labs/print-labs/releases/download/";
 /// How many releases the dialog lists.
 pub const LISTED: usize = 10;
-/// Seconds between two start-up checks.
-#[cfg(not(target_arch = "wasm32"))]
-const DAY: u64 = 24 * 60 * 60;
 
 /// A published release.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -37,6 +36,22 @@ pub struct Release {
 
 /// Asks for the latest releases, newest first (blocking; it runs on its own thread).
 pub type UpdateSource = Arc<dyn Fn() -> Result<Vec<Release>, String> + Send + Sync>;
+
+/// Downloads `release` and arranges for it to replace this copy once the app has quit, then
+/// reopen it (blocking; it runs on its own thread). `Ok` means: quit now to finish.
+pub type UpdateApplier = Arc<dyn Fn(Release, Install) -> Result<(), String> + Send + Sync>;
+
+/// Where an automatic update is.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+#[derive(Default)]
+pub(crate) enum Apply {
+    #[default]
+    Idle,
+    #[cfg(not(target_arch = "wasm32"))]
+    Running(String, std::sync::mpsc::Receiver<Result<(), String>>),
+    /// Downloaded; the app has to quit to finish (it waits while there is unsaved work).
+    Ready(String),
+}
 
 /// How this copy of the app was put on the computer, which decides what an update downloads.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -137,8 +152,9 @@ pub(crate) struct Updates {
     pub(crate) notice: bool,
     /// The release picked in the dialog (its tag).
     picked: Option<String>,
-    /// Check once a day at start (saved).
+    /// Check at every start and update by itself (saved).
     pub(crate) at_start: bool,
+    pub(crate) apply: Apply,
     /// When the last check ran, in seconds since 1970 (saved).
     pub(crate) last_check: u64,
     /// A release the user chose to ignore (saved): no notice for it.
@@ -155,6 +171,7 @@ impl Default for Updates {
             notice: false,
             picked: None,
             at_start: true,
+            apply: Apply::Idle,
             last_check: 0,
             ignored: None,
         }
@@ -224,8 +241,7 @@ impl PrintCraftApp {
         {
             if !self.updates.started && self.update_source.is_some() {
                 self.updates.started = true;
-                let since = now().checked_sub(self.updates.last_check);
-                if self.updates.at_start && since.is_none_or(|s| s >= DAY) {
+                if self.updates.at_start {
                     self.updates.quiet = true;
                     self.start_check();
                 }
@@ -238,10 +254,14 @@ impl PrintCraftApp {
                 };
                 if std::mem::take(&mut self.updates.quiet)
                     && let Ok(list) = &result
-                    && let Some(newest) = newer(list, &self.installed_version).first()
+                    && let Some(newest) = newer(list, &self.installed_version).first().map(|r| (*r).clone())
                     && self.updates.ignored.as_deref() != Some(newest.version.as_str())
                 {
-                    self.updates.notice = true;
+                    if self.can_apply() {
+                        self.start_apply(newest);
+                    } else {
+                        self.updates.notice = true;
+                    }
                 }
                 if result.is_ok() {
                     self.updates.last_check = now();
@@ -249,6 +269,65 @@ impl PrintCraftApp {
                 self.updates.picked = None;
                 self.updates.check = Check::Done(result);
             }
+            if let Apply::Running(version, rx) = &self.updates.apply {
+                let result = match rx.try_recv() {
+                    Ok(r) => r,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("the update stopped unexpectedly".into()),
+                };
+                match result {
+                    Ok(()) => {
+                        self.updates.apply = Apply::Ready(version.clone());
+                        self.finish_update();
+                    }
+                    Err(e) => {
+                        self.updates.apply = Apply::Idle;
+                        self.notify(format!("Couldn't update: {e}"));
+                        self.updates.notice = true;
+                    }
+                }
+            }
+        }
+    }
+
+    /// The app can install a release by itself (the desktop app, not a build from source).
+    pub(crate) fn can_apply(&self) -> bool {
+        self.update_apply.is_some() && self.install != Install::Dev
+    }
+
+    /// Download `release` in the background; when it is ready the app quits and reopens updated.
+    pub(crate) fn start_apply(&mut self, release: Release) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let Some(apply) = self.update_apply.clone() else { return };
+            if !matches!(self.updates.apply, Apply::Idle) {
+                return;
+            }
+            self.updates.notice = false;
+            self.updates.open = false;
+            let (tx, rx) = std::sync::mpsc::channel();
+            let ctx = self.ctx.clone();
+            let install = self.install;
+            let version = release.version.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(apply(release, install));
+                if let Some(ctx) = ctx {
+                    ctx.request_repaint();
+                }
+            });
+            self.updates.apply = Apply::Running(version, rx);
+        }
+        #[cfg(target_arch = "wasm32")]
+        self.open_url(&release.url);
+    }
+
+    /// Quit so the downloaded update can replace this copy; with unsaved work it waits for the user.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn finish_update(&mut self) {
+        if self.first_dirty().is_none()
+            && let Some(ctx) = &self.ctx
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
 }
@@ -305,6 +384,7 @@ fn notice(app: &mut PrintCraftApp, ctx: &egui::Context) {
 
 /// The notice and the Updates dialog.
 pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
+    applying(app, ctx);
     if app.updates.notice && !app.updates.open {
         notice(app, ctx);
     }
@@ -316,6 +396,8 @@ pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
     let install = app.install;
     let mut close = false;
     let mut get: Option<String> = None;
+    let mut update: Option<Release> = None;
+    let can_apply = app.can_apply();
     let mut recheck = false;
     let modal = egui::Modal::new(egui::Id::new("updates")).show(ctx, |ui| {
         ui.set_width(460.0);
@@ -366,18 +448,21 @@ pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 let chosen = list.iter().find(|r| &r.version == picked).or(list.first());
                 ui.add_space(6.0);
                 ui.label(
-                    egui::RichText::new(match install {
-                        Install::Installed => "Downloads the installer: close Print Labs and run it to update.",
-                        Install::Portable => {
-                            "This is the portable copy: the new archive is downloaded; unpack it over this folder (or run atualizar-portables.ps1)."
-                        }
-                        Install::Dev => "Built from source: the release page is opened.",
+                    egui::RichText::new(match (install, can_apply) {
+                        (Install::Dev, _) => "Built from source: the release page is opened.",
+                        (_, true) => "Print Labs downloads this version, closes and reopens updated.",
+                        (Install::Installed, false) => "Downloads the installer: close Print Labs and run it to update.",
+                        (Install::Portable, false) => "This is the portable copy: the new archive is downloaded; unpack it over this folder.",
                     })
                     .color(t.text_muted)
                     .small(),
                 );
                 if let Some(r) = chosen {
-                    get = Some(download_for(r, install).unwrap_or(r.url.as_str()).to_string());
+                    if can_apply {
+                        update = Some(r.clone());
+                    } else {
+                        get = Some(download_for(r, install).unwrap_or(r.url.as_str()).to_string());
+                    }
                 }
                 ui.add_space(4.0);
                 if let Some(newest) = fresh.first() {
@@ -389,12 +474,19 @@ pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 }
             }
         }
-        ui.checkbox(&mut app.updates.at_start, "Check at start (once a day)");
+        ui.checkbox(&mut app.updates.at_start, "Update automatically when Print Labs starts");
         ui.add_space(6.0);
         ui.label(egui::RichText::new("Asks GitHub for the releases. Nothing is installed automatically.").color(t.text_muted).small());
         ui.add_space(12.0);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if let Some(url) = get.take() {
+            if update.is_some() {
+                if widgets::pill_button(ui, "Update now", true).clicked() {
+                    close = true;
+                } else {
+                    update = None;
+                }
+                close |= widgets::pill_button(ui, "Later", false).clicked();
+            } else if let Some(url) = get.take() {
                 let download = widgets::pill_button(ui, "Download", true).clicked();
                 close |= widgets::pill_button(ui, "Later", false).clicked();
                 if download {
@@ -410,6 +502,7 @@ pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
     if modal.should_close() {
         close = true;
         get = None;
+        update = None;
     }
     if recheck {
         app.check_for_updates();
@@ -420,5 +513,50 @@ pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
         if let Some(url) = get {
             app.open_url(&url);
         }
+        if let Some(r) = update {
+            app.start_apply(r);
+        }
+    }
+}
+
+/// While an automatic update downloads, and when it waits for the app to quit.
+fn applying(app: &mut PrintCraftApp, ctx: &egui::Context) {
+    let t = theme::Tokens::get(ctx);
+    let (version, ready) = match &app.updates.apply {
+        Apply::Idle => return,
+        #[cfg(not(target_arch = "wasm32"))]
+        Apply::Running(v, _) => (v.clone(), false),
+        Apply::Ready(v) => (v.clone(), true),
+    };
+    let mut quit = false;
+    egui::Area::new(egui::Id::new("update-applying"))
+        .order(egui::Order::Foreground)
+        .pivot(Align2::RIGHT_TOP)
+        .fixed_pos(ctx.content_rect().right_top() + vec2(-16.0, 56.0))
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+                ui.set_max_width(320.0);
+                ui.horizontal(|ui| {
+                    if ready {
+                        ui.add(crate::icons::image("cloud", 18.0, t.accent));
+                    } else {
+                        ui.spinner();
+                    }
+                    ui.label(egui::RichText::new(format!("Updating Print Labs to {}", short(&version))).strong());
+                });
+                if ready {
+                    ui.label(egui::RichText::new("Save your work: Print Labs closes and reopens updated.").color(t.text_muted));
+                    ui.add_space(6.0);
+                    quit = widgets::pill_button(ui, "Close and update", true).clicked();
+                } else {
+                    ui.label(egui::RichText::new("Downloading. Print Labs reopens by itself when it is done.").color(t.text_muted));
+                }
+            });
+        });
+    if quit {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+    if !ready {
+        ctx.request_repaint_after(std::time::Duration::from_millis(200));
     }
 }

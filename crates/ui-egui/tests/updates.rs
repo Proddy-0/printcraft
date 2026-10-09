@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use printcraft_ui_egui::PrintCraftApp;
-use printcraft_ui_egui::updates::{DOWNLOADS, Install, RELEASES_PAGE, Release, UpdateSource, download_for, is_newer, newer};
+use printcraft_ui_egui::updates::{DOWNLOADS, Install, RELEASES_PAGE, Release, UpdateApplier, UpdateSource, download_for, is_newer, newer};
 
 const OLD: &str = "v0.2.1-labs.20261007.51eb7a4";
 const MID: &str = "v0.2.1-labs.20261009.845a253";
@@ -51,8 +51,8 @@ fn harness_with(
     (h, calls)
 }
 
-/// Settings that already checked moments ago (no start-up check).
-const CHECKED: &str = r#"{"labs_updates": {"at_start": true, "last_check": 99999999999}}"#;
+/// Settings with the start-up check turned off.
+const CHECKED: &str = r#"{"labs_updates": {"at_start": false}}"#;
 
 /// Run frames until the background check has reported (or give up).
 fn settle(h: &mut Harness<'static, PrintCraftApp>) {
@@ -150,7 +150,7 @@ fn skipping_a_version_silences_its_notice() {
 }
 
 #[test]
-fn no_start_up_check_when_turned_off_or_done_today() {
+fn no_start_up_check_when_turned_off() {
     let (mut h, calls) = harness_with(Ok(vec![NEW]), MID, Install::Portable, r#"{"labs_updates": {"at_start": false}}"#);
     settle(&mut h);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -189,4 +189,64 @@ fn an_up_to_date_or_failed_check_says_so() {
     settle(&mut h);
     h.get_by_label_contains("Couldn't check for updates: couldn't reach GitHub");
     assert!(h.query_by_label("Download").is_none());
+}
+
+/// An applier that records what it was asked to install.
+fn recorder(answer: Result<(), &'static str>) -> (UpdateApplier, Arc<std::sync::Mutex<Vec<(String, Install)>>>) {
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    let apply: UpdateApplier = Arc::new(move |r: Release, i: Install| {
+        log.lock().unwrap().push((r.version, i));
+        answer.map_err(str::to_string)
+    });
+    (apply, seen)
+}
+
+#[test]
+fn a_newer_release_installs_itself_at_start() {
+    let (apply, seen) = recorder(Ok(()));
+    let (mut h, _) = harness_with(Ok(vec![NEW, MID, OLD]), MID, Install::Installed, "{}");
+    h.state_mut().update_apply = Some(apply);
+    settle(&mut h);
+    assert_eq!(*seen.lock().unwrap(), vec![(NEW.to_string(), Install::Installed)]);
+    assert!(h.query_by_label_contains("is available").is_none(), "no notice: it updates");
+    h.get_by_label_contains("Updating Print Labs to 0.3.0-labs.20261010.abc1234");
+}
+
+#[test]
+fn a_skipped_or_dev_build_is_not_installed_and_a_failure_falls_back_to_the_notice() {
+    let skipped = r#"{"labs_updates": {"ignored": "v0.3.0-labs.20261010.abc1234"}}"#;
+    let (apply, seen) = recorder(Ok(()));
+    let (mut h, _) = harness_with(Ok(vec![NEW, MID]), MID, Install::Installed, skipped);
+    h.state_mut().update_apply = Some(apply);
+    settle(&mut h);
+    assert!(seen.lock().unwrap().is_empty(), "a skipped version is not installed");
+
+    let (apply, seen) = recorder(Ok(()));
+    let (mut h, _) = harness_with(Ok(vec![NEW, MID]), "0.2.1", Install::Dev, "{}");
+    h.state_mut().update_apply = Some(apply);
+    settle(&mut h);
+    assert!(seen.lock().unwrap().is_empty(), "a build from source never installs");
+    h.get_by_label_contains("is available");
+
+    let (apply, seen) = recorder(Err("no network"));
+    let (mut h, _) = harness_with(Ok(vec![NEW, MID]), MID, Install::Portable, "{}");
+    h.state_mut().update_apply = Some(apply);
+    settle(&mut h);
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    h.get_by_label_contains("Print Labs 0.3.0-labs.20261010.abc1234 is available");
+}
+
+#[test]
+fn update_now_in_the_dialog_installs_the_picked_version() {
+    let (apply, seen) = recorder(Ok(()));
+    let (mut h, _) = harness_with(Ok(vec![NEW, MID, OLD]), MID, Install::Portable, CHECKED);
+    h.state_mut().update_apply = Some(apply);
+    h.state_mut().execute("help.check_updates");
+    settle(&mut h);
+    h.get_by_label_contains("0.2.1-labs.20261007.51eb7a4").click();
+    h.run_steps(3);
+    h.get_by_label("Update now").click();
+    settle(&mut h);
+    assert_eq!(*seen.lock().unwrap(), vec![(OLD.to_string(), Install::Portable)]);
 }

@@ -308,6 +308,8 @@ pub struct PrintCraftApp {
     pub dialog: Option<Dialog>,
     /// How to ask for the releases (the desktop app sets it; see `updates`).
     pub update_source: Option<updates::UpdateSource>,
+    /// How to install a release by itself (the desktop app on Windows sets it; see `updates`).
+    pub update_apply: Option<updates::UpdateApplier>,
     /// This copy's version: the release tag from the `VERSION` file, or the crate version.
     pub installed_version: String,
     /// How this copy was installed, which decides what an update downloads.
@@ -504,6 +506,7 @@ impl PrintCraftApp {
             follow_system_theme: false,
             dialog: None,
             update_source: None,
+            update_apply: None,
             installed_version: env!("CARGO_PKG_VERSION").to_string(),
             install: updates::Install::Dev,
             updates: updates::Updates::default(),
