@@ -306,8 +306,14 @@ pub struct PrintCraftApp {
     /// Follow the operating system's light/dark setting.
     pub follow_system_theme: bool,
     pub dialog: Option<Dialog>,
-    /// How to ask for the latest release (the desktop app sets it; see `updates`).
+    /// How to ask for the releases (the desktop app sets it; see `updates`).
     pub update_source: Option<updates::UpdateSource>,
+    /// How to install a release by itself (the desktop app on Windows sets it; see `updates`).
+    pub update_apply: Option<updates::UpdateApplier>,
+    /// This copy's version: the release tag from the `VERSION` file, or the crate version.
+    pub installed_version: String,
+    /// How this copy was installed, which decides what an update downloads.
+    pub install: updates::Install,
     pub(crate) updates: updates::Updates,
     pub palette_open: bool,
     pub palette_query: String,
@@ -500,6 +506,9 @@ impl PrintCraftApp {
             follow_system_theme: false,
             dialog: None,
             update_source: None,
+            update_apply: None,
+            installed_version: env!("CARGO_PKG_VERSION").to_string(),
+            install: updates::Install::Dev,
             updates: updates::Updates::default(),
             palette_open: false,
             palette_query: String::new(),
@@ -1153,6 +1162,7 @@ impl PrintCraftApp {
             "custom_stamps": stamps_ui::encode(&self.custom_stamps),
             "javascript": self.session.javascript(),
             "actions": actions_ui::encode(&self.custom_actions),
+            "labs_updates": self.updates.persist(),
         })
         .to_string()
     }
@@ -1215,6 +1225,7 @@ impl PrintCraftApp {
         if let Some(on) = v["javascript"].as_bool() {
             self.session.set_javascript(on);
         }
+        self.updates.restore(&v["labs_updates"]);
         if let Ok(pems) = serde_json::from_value::<Vec<String>>(v["trusted"].clone()) {
             let certs = pems.iter().filter_map(|p| printcraft_engine::sign::x509::load_certificates(p.as_bytes()).ok()).flatten().collect();
             self.session.set_trusted_certificates(certs);

@@ -20,6 +20,9 @@ jobs:
           New-Item -ItemType Directory dist | Out-Null
           Copy-Item target/release/printcraft.exe dist/
           Copy-Item LICENSE-MIT, LICENSE-APACHE, NOTICE dist/
+          # A test build: the updater treats it as a portable copy older than any release of this version.
+          $ver = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches.Groups[1].Value
+          "v$ver-labs.test.$(git rev-parse --short HEAD)" | Set-Content -NoNewline dist/VERSION
       - uses: actions/upload-artifact@v4
         with:
           name: printcraft-portable-windows-x64
