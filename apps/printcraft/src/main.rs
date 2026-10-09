@@ -96,7 +96,8 @@ fn main() -> eframe::Result {
                 app.restore(&json);
             }
             app.integrated_titlebar = integrated;
-            app.update_source = Some(std::sync::Arc::new(updates::latest_release));
+            app.update_source = Some(std::sync::Arc::new(updates::releases));
+            (app.installed_version, app.install) = updates::installed();
             app.keychain_ids = cfg!(target_os = "macos");
             #[cfg(target_os = "macos")]
             {
