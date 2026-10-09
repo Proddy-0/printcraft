@@ -5,10 +5,10 @@
 //! ([`PrintCraftApp::installed_version`], [`PrintCraftApp::install`]), so this crate has no
 //! network code; without a source (the web build) the command opens the releases page.
 //! At every start a quiet check runs (it can be turned off in the dialog). When a newer release is
-//! out and the app knows how to install it ([`PrintCraftApp::update_apply`]: the desktop app on
-//! Windows), it downloads it, closes and reopens updated, like other self-updating apps; unsaved
-//! work is never closed without asking. Otherwise a notice offers the release, which can be
-//! dismissed or skipped for good.
+//! out, the app asks: Update, Not now, or Skip this version. Update downloads it and, where the app
+//! knows how to install it ([`PrintCraftApp::update_apply`]: the desktop app on Windows), closes
+//! and runs the installer, which reopens the app updated; unsaved work is never closed without
+//! asking. Elsewhere the dialog offers the download.
 
 use std::sync::Arc;
 
@@ -152,7 +152,7 @@ pub(crate) struct Updates {
     pub(crate) notice: bool,
     /// The release picked in the dialog (its tag).
     picked: Option<String>,
-    /// Check at every start and update by itself (saved).
+    /// Check at every start and ask when a newer release is out (saved).
     pub(crate) at_start: bool,
     pub(crate) apply: Apply,
     /// When the last check ran, in seconds since 1970 (saved).
@@ -257,11 +257,7 @@ impl PrintCraftApp {
                     && let Some(newest) = newer(list, &self.installed_version).first().map(|r| (*r).clone())
                     && self.updates.ignored.as_deref() != Some(newest.version.as_str())
                 {
-                    if self.can_apply() {
-                        self.start_apply(newest);
-                    } else {
-                        self.updates.notice = true;
-                    }
+                    self.updates.notice = true;
                 }
                 if result.is_ok() {
                     self.updates.last_check = now();
@@ -281,9 +277,10 @@ impl PrintCraftApp {
                         self.finish_update();
                     }
                     Err(e) => {
+                        // The dialog still offers the download by hand.
                         self.updates.apply = Apply::Idle;
                         self.notify(format!("Couldn't update: {e}"));
-                        self.updates.notice = true;
+                        self.updates.open = true;
                     }
                 }
             }
@@ -345,40 +342,41 @@ fn short(tag: &str) -> &str {
     tag.trim_start_matches(['v', 'V'])
 }
 
-/// The notice in the top-right corner after a start-up check found a newer release.
+/// The question after a start-up check found a newer release: Update, Not now, Skip this version.
 fn notice(app: &mut PrintCraftApp, ctx: &egui::Context) {
     let Check::Done(Ok(list)) = &app.updates.check else { return };
     let Some(newest) = newer(list, &app.installed_version).first().map(|r| (*r).clone()) else { return };
     let t = theme::Tokens::get(ctx);
-    let (mut view, mut ignore, mut close) = (false, false, false);
-    egui::Area::new(egui::Id::new("update-notice"))
-        .order(egui::Order::Foreground)
-        .pivot(Align2::RIGHT_TOP)
-        .fixed_pos(ctx.content_rect().right_top() + vec2(-16.0, 56.0))
-        .show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
-                ui.set_max_width(320.0);
-                ui.horizontal(|ui| {
-                    ui.add(crate::icons::image("cloud", 18.0, t.accent));
-                    ui.label(egui::RichText::new(format!("Print Labs {} is available", short(&newest.version))).strong());
-                });
-                ui.label(egui::RichText::new(format!("You have {}.", short(&app.installed_version))).color(t.text_muted));
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    view = widgets::pill_button(ui, "See update", true).clicked();
-                    ignore = widgets::pill_button(ui, "Skip this version", false).clicked();
-                    close = widgets::pill_button(ui, "Later", false).clicked();
-                });
-            });
+    let (mut update, mut skip, mut later) = (false, false, false);
+    let modal = egui::Modal::new(egui::Id::new("update-available")).show(ctx, |ui| {
+        ui.set_width(400.0);
+        ui.horizontal(|ui| {
+            ui.add(crate::icons::image("cloud", 22.0, t.accent));
+            ui.label(egui::RichText::new("Update available").font(theme::semibold(16.0)));
         });
-    if ignore {
-        app.updates.ignored = Some(newest.version);
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new(format!("Print Labs {} is available.", short(&newest.version))).strong());
+        ui.label(egui::RichText::new(format!("You have {}. Update now?", short(&app.installed_version))).color(t.text_muted));
+        ui.add_space(12.0);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            update = widgets::pill_button(ui, "Update", true).clicked();
+            later = widgets::pill_button(ui, "Not now", false).clicked();
+            skip = widgets::pill_button(ui, "Skip this version", false).clicked();
+        });
+    });
+    later |= modal.should_close();
+    if skip {
+        app.updates.ignored = Some(newest.version.clone());
     }
-    if view {
-        app.updates.open = true;
-    }
-    if view || ignore || close {
+    if update || skip || later {
         app.updates.notice = false;
+    }
+    if update {
+        if app.can_apply() {
+            app.start_apply(newest);
+        } else {
+            app.updates.open = true;
+        }
     }
 }
 

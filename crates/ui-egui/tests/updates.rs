@@ -121,7 +121,8 @@ fn a_start_up_check_shows_a_notice_that_opens_the_dialog() {
     settle(&mut h);
     assert_eq!(calls.load(Ordering::SeqCst), 1, "one check at start");
     h.get_by_label_contains("Print Labs 0.3.0-labs.20261010.abc1234 is available");
-    h.get_by_label("See update").click();
+    // No installer hook here: Update opens the dialog with the download.
+    h.get_by_label("Update").click();
     settle(&mut h);
     h.get_by_label_contains("This is the portable copy");
     h.get_by_label_contains("(this one)");
@@ -138,6 +139,7 @@ fn skipping_a_version_silences_its_notice() {
     h.get_by_label("Skip this version").click();
     h.run_steps(3);
     assert!(h.query_by_label_contains("is available").is_none());
+    assert!(h.query_by_label("Update available").is_none());
     let saved = h.state().persist();
     assert!(saved.contains(NEW), "the skipped version is saved: {saved}");
 
@@ -206,18 +208,34 @@ fn recorder(answer: Result<(), &'static str>) -> (UpdateApplier, Seen) {
 }
 
 #[test]
-fn a_newer_release_installs_itself_at_start() {
+fn a_newer_release_is_asked_about_and_installed_on_yes() {
     let (apply, seen) = recorder(Ok(()));
     let (mut h, _) = harness_with(Ok(vec![NEW, MID, OLD]), MID, Install::Installed, "{}");
     h.state_mut().update_apply = Some(apply);
     settle(&mut h);
+    h.get_by_label("Update available");
+    assert!(seen.lock().unwrap().is_empty(), "nothing is installed before the user says yes");
+    h.get_by_label("Update").click();
+    settle(&mut h);
     assert_eq!(*seen.lock().unwrap(), vec![(NEW.to_string(), Install::Installed)]);
-    assert!(h.query_by_label_contains("is available").is_none(), "no notice: it updates");
     h.get_by_label_contains("Updating Print Labs to 0.3.0-labs.20261010.abc1234");
 }
 
 #[test]
-fn a_skipped_or_dev_build_is_not_installed_and_a_failure_falls_back_to_the_notice() {
+fn not_now_leaves_it_for_the_next_start() {
+    let (apply, seen) = recorder(Ok(()));
+    let (mut h, _) = harness_with(Ok(vec![NEW, MID]), MID, Install::Installed, "{}");
+    h.state_mut().update_apply = Some(apply);
+    settle(&mut h);
+    h.get_by_label("Not now").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Update available").is_none());
+    assert!(seen.lock().unwrap().is_empty());
+    assert!(!h.state().persist().contains(NEW), "not skipped: asked again next time");
+}
+
+#[test]
+fn a_skipped_or_dev_build_is_not_installed_and_a_failure_falls_back_to_the_dialog() {
     let skipped = r#"{"labs_updates": {"ignored": "v0.3.0-labs.20261010.abc1234"}}"#;
     let (apply, seen) = recorder(Ok(()));
     let (mut h, _) = harness_with(Ok(vec![NEW, MID]), MID, Install::Installed, skipped);
@@ -229,15 +247,19 @@ fn a_skipped_or_dev_build_is_not_installed_and_a_failure_falls_back_to_the_notic
     let (mut h, _) = harness_with(Ok(vec![NEW, MID]), "0.2.1", Install::Dev, "{}");
     h.state_mut().update_apply = Some(apply);
     settle(&mut h);
+    h.get_by_label("Update").click();
+    settle(&mut h);
     assert!(seen.lock().unwrap().is_empty(), "a build from source never installs");
-    h.get_by_label_contains("is available");
+    h.get_by_label_contains("Built from source");
 
     let (apply, seen) = recorder(Err("no network"));
     let (mut h, _) = harness_with(Ok(vec![NEW, MID]), MID, Install::Portable, "{}");
     h.state_mut().update_apply = Some(apply);
     settle(&mut h);
+    h.get_by_label("Update").click();
+    settle(&mut h);
     assert_eq!(seen.lock().unwrap().len(), 1);
-    h.get_by_label_contains("Print Labs 0.3.0-labs.20261010.abc1234 is available");
+    h.get_by_label_contains("Print Labs 0.3.0-labs.20261010.abc1234 is available.");
 }
 
 #[test]

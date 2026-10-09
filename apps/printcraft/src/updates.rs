@@ -1,8 +1,8 @@
 //! Asks GitHub for the Print Labs releases (Help ▸ Check for updates; Proddyt Switch, LABS-156),
 //! tells which release this copy is and how it was installed, and on Windows updates it by itself:
-//! the new installer or portable archive is downloaded, and a small PowerShell helper waits for
-//! the app to quit, installs it (silent installer, or the archive unpacked over this folder) and
-//! reopens the app.
+//! once the user says yes, the new installer or portable archive is downloaded, and a small
+//! PowerShell helper waits for the app to quit, installs it (the installer showing its progress, or
+//! the archive unpacked over this folder) and reopens the app.
 
 use std::path::Path;
 use std::time::Duration;
@@ -42,7 +42,7 @@ $log = Join-Path $env:TEMP 'print-labs-update.log'
 try {
     Wait-Process -Id $AppPid -ErrorAction SilentlyContinue
     if ($Kind -eq 'installed') {
-        $p = Start-Process -FilePath $File -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+        $p = Start-Process -FilePath $File -ArgumentList '/SILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
         if ($p.ExitCode -ne 0) { throw "installer exit $($p.ExitCode)" }
     } else {
         $x = Join-Path $env:TEMP ('print-labs-' + [guid]::NewGuid())
