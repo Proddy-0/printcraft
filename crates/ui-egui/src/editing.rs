@@ -395,6 +395,16 @@ impl PrintCraftApp {
                 self.right = Some(crate::RightPanel::Bookmarks);
                 return;
             }
+            A::FromHeadings => {
+                match self.session.get(id).and_then(|d| d.bookmarks_from_headings()) {
+                    Some(e) => {
+                        self.apply_edit(e);
+                        self.right = Some(crate::RightPanel::Bookmarks);
+                    }
+                    None => self.notify("No headings found (the text has no larger or bold titles; scanned pages need OCR first)"),
+                }
+                return;
+            }
             A::StartRename(path) => {
                 let title = self.session.get(id).and_then(|d| bookmark_at(&d.info.outline, &path)).map(|b| b.title.clone()).unwrap_or_default();
                 self.bookmark_rename = Some((path, title));

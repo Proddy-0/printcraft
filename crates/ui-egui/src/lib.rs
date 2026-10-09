@@ -92,6 +92,8 @@ pub enum Mode {
 pub enum LeftPanel {
     AllTools,
     Tool(&'static str),
+    /// Fork: the top-bar Menu (File, Edit, Pages, View, Help) as a side panel.
+    Menu,
 }
 
 /// Right-hand panels, opened from the rail.
@@ -858,21 +860,65 @@ impl PrintCraftApp {
 
     /// New empty collection; returns its index.
     pub fn create_collection(&mut self, name: &str) -> usize {
-        self.collections.push(folders::Collection { name: name.to_string(), files: Vec::new() });
+        self.collections.push(folders::Collection { name: name.to_string(), ..Default::default() });
         self.collections.len() - 1
     }
 
     /// Show a collection on the Home tab.
     pub fn open_collection(&mut self, i: usize) {
         let Some(c) = self.collections.get(i) else { return };
-        self.folder = Some(folders::FolderView {
-            name: c.name.clone(),
-            path: String::new(),
-            files: folders::entries(&c.files),
-            filter: String::new(),
-            collection: Some(i),
-        });
+        // Reopening the same collection (after an edit) keeps the filter and folded sections.
+        let (filter, collapsed) = match self.folder.take() {
+            Some(v) if v.collection == Some(i) => (v.filter, v.collapsed),
+            _ => Default::default(),
+        };
+        self.folder =
+            Some(folders::FolderView { name: c.name.clone(), path: String::new(), files: c.entries(), filter, collection: Some(i), collapsed });
         self.active = None;
+    }
+
+    /// Add PDFs to a collection, each with its section (`None` = no section).
+    pub fn add_to_collection_in(&mut self, i: usize, items: &[(String, Option<String>)]) {
+        let paths: Vec<String> = items.iter().map(|(p, _)| p.clone()).collect();
+        if let Some(c) = self.collections.get_mut(i) {
+            for (p, s) in items {
+                if s.is_some() {
+                    c.set_section(p, s.as_deref());
+                }
+            }
+        }
+        self.add_to_collection(i, &paths);
+    }
+
+    pub fn set_section(&mut self, i: usize, file: &str, section: Option<&str>) {
+        if let Some(c) = self.collections.get_mut(i) {
+            c.set_section(file, section);
+        }
+        self.refresh_collection_view(i);
+    }
+
+    pub fn rename_section(&mut self, i: usize, old: &str, new: &str) {
+        if let Some(c) = self.collections.get_mut(i) {
+            c.rename_section(old, new);
+        }
+        self.refresh_collection_view(i);
+    }
+
+    pub fn remove_section(&mut self, i: usize, name: &str) {
+        if let Some(c) = self.collections.get_mut(i) {
+            c.remove_section(name);
+        }
+        self.refresh_collection_view(i);
+    }
+
+    pub fn rename_collection(&mut self, i: usize, name: &str) {
+        let name = name.trim();
+        if let Some(c) = self.collections.get_mut(i).filter(|_| !name.is_empty()) {
+            c.name = name.to_string();
+        }
+        if let Some(v) = self.folder.as_mut().filter(|v| v.collection == Some(i)) {
+            v.name = name.to_string();
+        }
     }
 
     pub fn add_to_collection(&mut self, i: usize, paths: &[String]) {
@@ -890,6 +936,7 @@ impl PrintCraftApp {
     pub fn remove_from_collection(&mut self, i: usize, path: &str) {
         if let Some(c) = self.collections.get_mut(i) {
             c.files.retain(|p| p != path);
+            c.section_of.remove(path);
         }
         self.refresh_collection_view(i);
     }
@@ -928,11 +975,7 @@ impl PrintCraftApp {
                     self.progress.insert(novo.clone(), p);
                 }
                 for c in &mut self.collections {
-                    for f in &mut c.files {
-                        if f == path {
-                            f.clone_from(&novo);
-                        }
-                    }
+                    c.renamed(path, &novo);
                 }
                 self.recent.retain(|r| r.path != path);
                 self.notify(format!("Moved to {dest_dir}"));
@@ -974,8 +1017,11 @@ impl PrintCraftApp {
     /// Pick a folder and browse its PDFs on the Home tab (desktop only).
     pub fn open_folder_dialog(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(p) = rfd::FileDialog::new().set_title("Open a folder of PDFs").pick_folder() {
-            self.open_folder(&p.to_string_lossy());
+        // Several folders at once: each goes to Recent; the last one is shown.
+        if let Some(ps) = rfd::FileDialog::new().set_title("Open folders of PDFs").pick_folders() {
+            for p in ps {
+                self.open_folder(&p.to_string_lossy());
+            }
         }
     }
 
@@ -990,16 +1036,19 @@ impl PrintCraftApp {
         let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
         let files = folders::scan(root);
         folders::bump(&mut self.recent_folders, folders::RecentFolder { name: name.clone(), path: path.to_string(), count: files.len(), last: None });
-        self.folder = Some(folders::FolderView { name, path: path.to_string(), files, filter: String::new(), collection: None });
+        self.folder = Some(folders::FolderView { name, path: path.to_string(), files, ..Default::default() });
         self.active = None;
     }
 
     pub fn open_dialog(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(p) =
-            rfd::FileDialog::new().add_filter("PDF", &["pdf"]).add_filter("Images and text (converted to PDF)", &create_ui::CONVERTIBLE).pick_file()
+        // Several files at once, each in its own tab.
+        if let Some(ps) =
+            rfd::FileDialog::new().add_filter("PDF", &["pdf"]).add_filter("Images and text (converted to PDF)", &create_ui::CONVERTIBLE).pick_files()
         {
-            self.open_path(&p.to_string_lossy());
+            for p in ps {
+                self.open_path(&p.to_string_lossy());
+            }
         }
         // Browsers pick files asynchronously; the bytes arrive through `inbox`.
         #[cfg(target_arch = "wasm32")]
@@ -1472,7 +1521,7 @@ impl eframe::App for PrintCraftApp {
         let title = self
             .active
             .and_then(|i| self.session.get(self.views[i].id))
-            .map_or_else(|| "PrintCraft".to_owned(), |d| format!("{} — PrintCraft", d.display_name()));
+            .map_or_else(|| "Print Labs".to_owned(), |d| format!("{} — Print Labs", d.display_name()));
         if title != self.window_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.window_title = title;
@@ -1495,11 +1544,12 @@ impl eframe::App for PrintCraftApp {
         chrome::mode_bar(self, ui);
         if self.active.is_some() {
             chrome::right_rail(self, ui);
-            if self.right.is_some() && self.mode != Mode::Read {
+            // Fork: the rail's panels open in Read mode too (upstream hid them, so the rail did nothing).
+            if self.right.is_some() {
                 panels::right_panel(self, ui);
             }
         }
-        if self.left_open && self.mode != Mode::Read {
+        if self.left_open && (self.mode != Mode::Read || self.left == LeftPanel::Menu) {
             panels::left_panel(self, ui);
         }
         let t = theme::Tokens::get(&ctx);

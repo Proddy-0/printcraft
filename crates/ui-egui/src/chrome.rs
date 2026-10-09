@@ -54,10 +54,6 @@ pub fn tab_strip(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                     if icons::button(ui, "circle-help", 28.0, false, "Keyboard shortcuts").clicked() {
                         app.dialog = Some(Dialog::Shortcuts);
                     }
-                    // One click to the community, from anywhere in the app.
-                    if widgets::ghost_button(ui, "messages-square", "Discord").on_hover_text(printcraft_engine::links::DISCORD).clicked() {
-                        app.execute("help.discord");
-                    }
                 });
             });
         });
@@ -131,8 +127,8 @@ pub fn mode_bar(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
-                    let has_doc = app.active.is_some();
-                    ui.add_enabled_ui(has_doc, |ui| {
+                    // Document actions only when a document is open (fork: hidden on Home, not greyed out).
+                    if app.active.is_some() {
                         if icons::button(ui, "printer", 32.0, false, "Print (⌘P)").clicked() {
                             app.run_command("print.dialog");
                         }
@@ -142,7 +138,7 @@ pub fn mode_bar(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                         if icons::button(ui, "info", 32.0, false, "Document properties (⌘D)").clicked() {
                             app.dialog = Some(Dialog::Properties(PropsTab::Description));
                         }
-                    });
+                    }
                     ui.add_space(8.0);
                     if widgets::search_box(ui, "Find tools and commands", 260.0).clicked() {
                         app.palette_open = true;
@@ -152,16 +148,39 @@ pub fn mode_bar(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
         });
 }
 
+/// Fork: Menu opens as a side panel, like All tools and the other modes.
 fn main_menu(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
+    let aberto = app.left_open && app.left == crate::LeftPanel::Menu;
+    if widgets::mode_tab(ui, app.language.tr("Menu"), aberto).clicked() {
+        if aberto {
+            app.left_open = false;
+            app.left = crate::LeftPanel::AllTools;
+        } else {
+            app.left = crate::LeftPanel::Menu;
+            app.left_open = true;
+        }
+    }
+}
+
+/// The Menu side panel: File, Edit, Pages, View and Help as sections.
+pub fn menu_panel(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
     let language = app.language;
     let t = Tokens::get(ui.ctx());
-    let resp = widgets::ghost_button(ui, "panel-left", language.tr("Menu"));
-    egui::Popup::menu(&resp).show(|ui| {
-        ui.set_min_width(230.0);
-        ui.menu_button(language.tr("File"), |ui| crate::commands::registry_menu(app, ui, "File"));
-        ui.menu_button(language.tr("Edit"), |ui| crate::commands::registry_menu(app, ui, "Edit"));
-        ui.menu_button(language.tr("Pages"), |ui| crate::commands::registry_menu(app, ui, "Pages"));
-        ui.menu_button(language.tr("View"), |ui| {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(language.tr("Menu")).font(theme::semibold(15.5)).color(t.text));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if icons::button(ui, "x", 26.0, false, "Close panel").clicked() {
+                app.left_open = false;
+                app.left = crate::LeftPanel::AllTools;
+            }
+        });
+    });
+    ui.add_space(6.0);
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        egui::CollapsingHeader::new(language.tr("File")).default_open(true).show(ui, |ui| crate::commands::registry_menu(app, ui, "File"));
+        egui::CollapsingHeader::new(language.tr("Edit")).default_open(true).show(ui, |ui| crate::commands::registry_menu(app, ui, "Edit"));
+        egui::CollapsingHeader::new(language.tr("Pages")).default_open(true).show(ui, |ui| crate::commands::registry_menu(app, ui, "Pages"));
+        egui::CollapsingHeader::new(language.tr("View")).show(ui, |ui| {
             if let Some(i) = app.active {
                 let v = &mut app.views[i];
                 ui.label(egui::RichText::new("Zoom").color(t.text_faint).small());
@@ -219,7 +238,7 @@ fn main_menu(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                 ui.separator();
             }
             crate::commands::registry_menu(app, ui, "View");
-            ui.menu_button(language.tr("Display theme"), |ui| {
+            egui::CollapsingHeader::new(language.tr("Display theme")).show(ui, |ui| {
                 let ctx = ui.ctx().clone();
                 if ui.radio(app.follow_system_theme, "Use system setting").clicked() {
                     app.follow_system_theme = true;
@@ -233,7 +252,7 @@ fn main_menu(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                     app.set_theme(&ctx, ThemeKind::Dark);
                 }
             });
-            ui.menu_button(language.tr("Side panels"), |ui| {
+            egui::CollapsingHeader::new(language.tr("Side panels")).show(ui, |ui| {
                 for (p, label) in [
                     (RightPanel::Comments, "Comments"),
                     (RightPanel::Bookmarks, "Bookmarks"),
@@ -252,7 +271,7 @@ fn main_menu(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                 }
             });
         });
-        ui.menu_button(language.tr("Help"), |ui| crate::commands::registry_menu(app, ui, "Help"));
+        egui::CollapsingHeader::new(language.tr("Help")).default_open(true).show(ui, |ui| crate::commands::registry_menu(app, ui, "Help"));
     });
 }
 

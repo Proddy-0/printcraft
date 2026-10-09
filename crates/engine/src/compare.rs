@@ -151,6 +151,32 @@ impl OfficeFormat {
 }
 
 impl crate::Document {
+    /// Bookmarks from the document's headings, after the existing ones, as one undoable step.
+    /// `None` when no heading is found.
+    pub fn bookmarks_from_headings(&self) -> Option<crate::Edit> {
+        let heads = printcraft_export::headings(&self.export_pages());
+        if heads.is_empty() {
+            return None;
+        }
+        let mut edits = Vec::new();
+        let mut top = self.info.outline.len();
+        let mut last_top: Option<(usize, usize)> = None; // (index, children so far)
+        for (page, lv, title) in heads {
+            match (lv, last_top.as_mut()) {
+                (2, Some((parent, kids))) => {
+                    edits.push(crate::Edit::AddBookmark { parent: vec![*parent], index: *kids, title, page });
+                    *kids += 1;
+                }
+                _ => {
+                    edits.push(crate::Edit::AddBookmark { parent: vec![], index: top, title, page });
+                    last_top = (lv == 1).then_some((top, 0));
+                    top += 1;
+                }
+            }
+        }
+        Some(crate::Edit::Batch { label: "Create bookmarks from headings".into(), edits })
+    }
+
     /// The pages as paragraphs and images (for Word, HTML and RTF export).
     pub fn export_pages(&self) -> Vec<printcraft_export::Page> {
         let Some(cos) = self.editor.as_ref().map(|e| &e.cos) else { return Vec::new() };

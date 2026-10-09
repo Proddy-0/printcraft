@@ -181,8 +181,11 @@ fn the_pages_menu_comes_from_the_registry() {
     let mut h = harness();
     h.get_by_label("Menu").click();
     h.run_steps(2);
-    h.get_by_label("Pages ⏵").hover();
-    h.run_steps(3);
+    // Fork: Menu is a side panel; fold File and Edit so Pages is on screen.
+    h.get_by_label("File").click();
+    h.run_steps(2);
+    h.get_all_by_label("Edit").find(|n| n.rect().top() > 90.0).unwrap().click(); // the section, not the Edit mode tab
+    h.run_steps(2);
     h.get_by_label_contains("Delete pages").click();
     h.run_steps(3);
     let app = h.state();

@@ -194,7 +194,7 @@ impl CommentTool {
     /// A placeholder shape of this kind (for per-tool default styles).
     fn sample(self) -> Shape {
         match self {
-            Self::Note => Shape::Note { at: [0.0; 2], icon: NoteIcon::Comment },
+            Self::Note => Shape::Note { at: [0.0; 2], icon: NoteIcon::Circle },
             Self::TextBox => Shape::TextBox { rect: [0.0; 4], font_size: 12.0 },
             Self::Highlight | Self::Underline | Self::StrikeOut | Self::Squiggly => {
                 Shape::TextMarkup { kind: self.markup().unwrap_or(Markup::Highlight), quads: Vec::new() }
@@ -1074,7 +1074,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         ComposerKind::Edit(index) => Some(Edit::SetAnnotationContents { page, index, text }),
         ComposerKind::Note => {
             view.comments.tool_done = true;
-            Some(new_comment(&cx, CommentTool::Note, Shape::Note { at: c.at, icon: NoteIcon::Comment }, text))
+            Some(new_comment(&cx, CommentTool::Note, Shape::Note { at: c.at, icon: NoteIcon::Circle }, text))
         }
         ComposerKind::TextBox => {
             view.comments.tool_done = true;

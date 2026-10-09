@@ -88,13 +88,95 @@ pub struct FolderView {
     pub filter: String,
     /// Set when the view shows a collection (virtual folder) instead of a folder on disk.
     pub collection: Option<usize>,
+    /// Sections (subfolders, or a collection's sections) folded away.
+    pub collapsed: std::collections::BTreeSet<String>,
 }
 
 /// A collection: a named list of PDFs from anywhere (a virtual folder; files stay where they are).
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Collection {
     pub name: String,
     pub files: Vec<String>,
+    /// Sections, in display order (like subfolders, but only in the collection).
+    #[serde(default)]
+    pub sections: Vec<String>,
+    /// The section of each file; files not listed have none and show first.
+    #[serde(default)]
+    pub section_of: std::collections::BTreeMap<String, String>,
+    /// Last PDF opened from the collection ("Continue").
+    #[serde(default)]
+    pub last: Option<String>,
+}
+
+impl Collection {
+    /// Entries in display order: files without a section, then each section in order. `rel` is
+    /// "section/name", so the list groups them like subfolders.
+    pub fn entries(&self) -> Vec<FolderEntry> {
+        let sem: Vec<String> = self.files.iter().filter(|f| !self.section_of.contains_key(*f)).cloned().collect();
+        let mut out = entries(&sem);
+        for s in &self.sections {
+            let fs: Vec<String> = self.files.iter().filter(|f| self.section_of.get(*f) == Some(s)).cloned().collect();
+            out.extend(entries(&fs).into_iter().map(|mut e| {
+                e.rel = format!("{s}/{}", e.name);
+                e
+            }));
+        }
+        out
+    }
+
+    /// Put a file in a section (created at the end if new), or take it out of any (`None`).
+    pub fn set_section(&mut self, file: &str, section: Option<&str>) {
+        match section.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(s) => {
+                if !self.sections.iter().any(|x| x == s) {
+                    self.sections.push(s.to_string());
+                }
+                self.section_of.insert(file.to_string(), s.to_string());
+            }
+            None => {
+                self.section_of.remove(file);
+            }
+        }
+    }
+
+    pub fn rename_section(&mut self, old: &str, new: &str) {
+        let new = new.trim();
+        if new.is_empty() || new == old {
+            return;
+        }
+        if self.sections.iter().any(|x| x == new) {
+            // Renaming onto an existing section merges the two.
+            self.sections.retain(|x| x != old);
+        } else if let Some(x) = self.sections.iter_mut().find(|x| *x == old) {
+            *x = new.to_string();
+        }
+        for v in self.section_of.values_mut() {
+            if v == old {
+                *v = new.to_string();
+            }
+        }
+    }
+
+    /// Remove a section; its files stay in the collection, without a section.
+    pub fn remove_section(&mut self, name: &str) {
+        self.sections.retain(|x| x != name);
+        self.section_of.retain(|_, v| v != name);
+    }
+
+    /// A file's path changed on disk (moved): keep its section and "Continue".
+    pub fn renamed(&mut self, old: &str, new: &str) {
+        for f in &mut self.files {
+            if f == old {
+                *f = new.to_string();
+            }
+        }
+        if let Some(s) = self.section_of.remove(old) {
+            self.section_of.insert(new.to_string(), s);
+        }
+        if self.last.as_deref() == Some(old) {
+            self.last = Some(new.to_string());
+        }
+    }
 }
 
 /// Network paths (\\server\share, //server/share): checking them can block for seconds when the

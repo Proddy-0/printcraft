@@ -94,6 +94,29 @@ fn level(b: &Block, body: f64) -> u8 {
     }
 }
 
+/// The document's headings, in reading order: (page, level 1 or 2, text on one line). Uses the
+/// same rule as the Word and HTML export (set larger, or bold and short, than the body text).
+pub fn headings(pages: &[Page]) -> Vec<(usize, u8, String)> {
+    let body = body_size(pages);
+    let mut out = Vec::new();
+    for (pi, p) in pages.iter().enumerate() {
+        for b in &p.blocks {
+            let lv = level(b, body);
+            let text = b.text.split_whitespace().collect::<Vec<_>>().join(" ");
+            // A heading has letters: page numbers and lone symbols set large are not one.
+            if lv == 0 || text.chars().filter(|c| c.is_alphabetic()).count() < 2 {
+                continue;
+            }
+            let text: String = if text.chars().count() > 120 { format!("{}…", text.chars().take(119).collect::<String>()) } else { text };
+            out.push((pi, lv, text));
+            if out.len() >= 2000 {
+                return out;
+            }
+        }
+    }
+    out
+}
+
 /// How far two cell left edges may drift (points) and still be the same grid column.
 const COL_TOL: f64 = 4.0;
 /// More grid columns than this isn't a table. It also bounds a table's size: every row is
@@ -637,6 +660,22 @@ pub fn rtf(pages: &[Page]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn headings_are_the_larger_lines_in_reading_order() {
+        let b = |text: &str, size: f64| Block { text: text.into(), rect: [0.0, 0.0, 100.0, 10.0], size, bold: false, italic: false };
+        let body = "Body text that is long enough to be the most common size in the document.";
+        let pages = vec![
+            Page { blocks: vec![b("Chapter 1", 24.0), b(body, 11.0), b("1.1  Setup", 15.0), b(body, 11.0), b("12", 24.0)], ..Default::default() },
+            Page { blocks: vec![b("Chapter   2", 24.0), b(body, 11.0)], ..Default::default() },
+        ];
+        assert_eq!(
+            headings(&pages),
+            vec![(0, 1, "Chapter 1".to_string()), (0, 2, "1.1 Setup".to_string()), (1, 1, "Chapter 2".to_string())],
+            "page numbers set large are not headings; whitespace is collapsed"
+        );
+        assert!(headings(&[Page { blocks: vec![b(body, 11.0)], ..Default::default() }]).is_empty());
+    }
 
     fn page() -> Page {
         let b = |t: &str, y: f64, size: f64, bold: bool| Block { text: t.into(), rect: [72.0, y, 500.0, y + size], size, bold, italic: false };

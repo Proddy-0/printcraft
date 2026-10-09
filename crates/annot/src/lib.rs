@@ -71,6 +71,8 @@ pub enum NoteIcon {
     Key,
     NewParagraph,
     Paragraph,
+    /// Fork: a plain dot, the default for new notes (easier to place over text).
+    Circle,
 }
 
 impl NoteIcon {
@@ -83,11 +85,14 @@ impl NoteIcon {
             NoteIcon::Key => "Key",
             NoteIcon::NewParagraph => "NewParagraph",
             NoteIcon::Paragraph => "Paragraph",
+            NoteIcon::Circle => "Circle",
         }
     }
 
     pub fn from_name(n: &str) -> Option<Self> {
-        [Self::Comment, Self::Note, Self::Help, Self::Insert, Self::Key, Self::NewParagraph, Self::Paragraph].into_iter().find(|i| i.name() == n)
+        [Self::Comment, Self::Note, Self::Help, Self::Insert, Self::Key, Self::NewParagraph, Self::Paragraph, Self::Circle]
+            .into_iter()
+            .find(|i| i.name() == n)
     }
 }
 
