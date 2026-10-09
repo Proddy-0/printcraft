@@ -191,8 +191,11 @@ fn an_up_to_date_or_failed_check_says_so() {
     assert!(h.query_by_label("Download").is_none());
 }
 
+/// What a recording applier was asked to install.
+type Seen = Arc<std::sync::Mutex<Vec<(String, Install)>>>;
+
 /// An applier that records what it was asked to install.
-fn recorder(answer: Result<(), &'static str>) -> (UpdateApplier, Arc<std::sync::Mutex<Vec<(String, Install)>>>) {
+fn recorder(answer: Result<(), &'static str>) -> (UpdateApplier, Seen) {
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let log = seen.clone();
     let apply: UpdateApplier = Arc::new(move |r: Release, i: Install| {
